@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Aprobaciones — Vacaciones CUC</title>
+  <!-- NUEVAS LÍNEAS -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <!-- FIN NUEVAS LÍNEAS -->
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Gestión de Aprobaciones</span>
+      <div class="topbar-actions">
+        <button class="btn btn-secondary btn-sm" onclick="loadSolicitudes()">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:13px;height:13px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+          Actualizar
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Filtros -->
+      <div class="flex items-center gap-2 mb-4" style="flex-wrap:wrap">
+        <select id="filtroEstado" class="form-control" style="width:auto;padding-left:12px" onchange="renderTable()">
+          <option value="">Todos los estados</option>
+          <option value="Pendiente" selected>Pendiente</option>
+          <option value="Aprobada Jefatura">Aprobada Jefatura</option>
+          <option value="Aprobada RRHH">Aprobada RRHH</option>
+          <option value="Rechazada">Rechazada</option>
+        </select>
+        <span id="countLabel" class="text-sm text-muted"></span>
+      </div>
+
+      <div class="card">
+        <div id="loadingState" class="loading"><div class="spinner"></div></div>
+        <div class="table-wrap" id="tableWrap" style="display:none">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Funcionario</th>
+                <th>Departamento</th>
+                <th>Inicio</th>
+                <th>Fin</th>
+                <th>Días</th>
+                <th>Estado</th>
+                <th>Observaciones</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="empty-state" style="display:none">
+          <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width:48px;height:48px;margin:0 auto 12px;display:block;opacity:.3"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+          <p>No hay solicitudes en este estado.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modal de revisión -->
+  <div class="modal-overlay" id="reviewModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title" id="modalTitle">Revisar Solicitud</span>
+        <button class="modal-close" onclick="closeModal('reviewModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:16px;height:16px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="modalInfo" style="background:var(--surface-2);border-radius:8px;padding:14px;margin-bottom:16px;font-size:13px;line-height:1.8"></div>
+        <div class="form-group">
+          <label class="form-label" for="obsRevision">Observaciones de revisión (opcional)</label>
+          <textarea id="obsRevision" class="form-control" placeholder="Comentario sobre la decisión..."></textarea>
+        </div>
+        <div id="reviewAlert" class="alert"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('reviewModal')">Cancelar</button>
+        <button class="btn btn-danger" id="btnRechazar" onclick="doAction('rechazar')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:13px;height:13px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Rechazar
+        </button>
+        <button class="btn btn-success" id="btnAprobar" onclick="doAction('aprobar')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:13px;height:13px"><polyline points="20 6 9 17 4 12"/></svg>
+          Aprobar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let allSolicitudes = [];
+    let selectedId = null;
+
+    function renderTable() {
+      const filtro = document.getElementById('filtroEstado').value;
+      const data = filtro ? allSolicitudes.filter(s => s.estado_nombre === filtro) : allSolicitudes;
+      document.getElementById('countLabel').textContent = `${data.length} solicitud${data.length !== 1 ? 'es' : ''}`;
+
+      if (!data.length) {
+        document.getElementById('tableWrap').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+        return;
+      }
+
+      document.getElementById('tableWrap').style.display = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+
+      const user = currentUser;
+      document.getElementById('tableBody').innerHTML = data.map(s => {
+        const isPending = s.estado_nombre === 'Pendiente';
+        const isJefApproved = s.estado_nombre === 'Aprobada Jefatura';
+        const canAct =
+          (isPending && ['Jefatura', 'RRHH', 'Administrador'].includes(user.rol)) ||
+          (isJefApproved && ['RRHH', 'Administrador'].includes(user.rol));
+
+        return `
+          <tr>
+            <td class="font-mono text-sm text-muted">#${s.id_solicitud}</td>
+            <td><strong>${s.usuario_nombre} ${s.usuario_apellidos}</strong></td>
+            <td class="text-muted text-sm">${s.departamento_nombre || '—'}</td>
+            <td>${formatDate(s.fecha_inicio)}</td>
+            <td>${formatDate(s.fecha_fin)}</td>
+            <td><strong>${s.dias_solicitados}</strong></td>
+            <td>${estadoBadge(s.estado_nombre)}</td>
+            <td class="text-sm text-muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.observaciones || '—'}</td>
+            <td>
+              ${canAct ? `
+                <button class="btn btn-primary btn-sm" onclick="openReview(${s.id_solicitud})">
+                  Revisar
+                </button>
+              ` : `<span class="text-muted text-sm">—</span>`}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function openReview(id) {
+      const s = allSolicitudes.find(x => x.id_solicitud === id);
+      if (!s) return;
+      selectedId = id;
+      document.getElementById('modalTitle').textContent = `Solicitud #${id}`;
+      document.getElementById('modalInfo').innerHTML = `
+        <div><span class="text-muted">Funcionario:</span> <strong>${s.usuario_nombre} ${s.usuario_apellidos}</strong></div>
+        <div><span class="text-muted">Período:</span> ${formatDate(s.fecha_inicio)} → ${formatDate(s.fecha_fin)}</div>
+        <div><span class="text-muted">Días hábiles:</span> <strong>${s.dias_solicitados}</strong></div>
+        <div><span class="text-muted">Estado actual:</span> ${estadoBadge(s.estado_nombre)}</div>
+        ${s.observaciones ? `<div><span class="text-muted">Observaciones:</span> ${s.observaciones}</div>` : ''}
+      `;
+      document.getElementById('obsRevision').value = '';
+      document.getElementById('reviewAlert').classList.remove('show');
+      openModal('reviewModal');
+    }
+
+    async function doAction(accion) {
+      const observaciones = document.getElementById('obsRevision').value;
+      const alert = document.getElementById('reviewAlert');
+      alert.classList.remove('show');
+
+      const btn = accion === 'aprobar' ? document.getElementById('btnAprobar') : document.getElementById('btnRechazar');
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`/api/solicitudes/${selectedId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accion, observaciones })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert.className = 'alert alert-error show';
+          alert.textContent = data.error || 'Error al procesar.';
+        } else {
+          closeModal('reviewModal');
+          await loadSolicitudes();
+        }
+      } catch {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'Error de conexión.';
+      }
+      btn.disabled = false;
+    }
+
+    async function loadSolicitudes() {
+      document.getElementById('loadingState').style.display = 'block';
+      document.getElementById('tableWrap').style.display = 'none';
+      document.getElementById('emptyState').style.display = 'none';
+
+      const res = await fetch('/api/solicitudes');
+      allSolicitudes = await res.json();
+      document.getElementById('loadingState').style.display = 'none';
+      renderTable();
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      if (!['Jefatura', 'RRHH', 'Administrador'].includes(user.rol)) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      buildSidebar('aprobaciones');
+      await loadSolicitudes();
+    }
+    init();
+  </script>
+</body>
+</html>

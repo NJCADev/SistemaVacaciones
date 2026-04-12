@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Usuarios — Vacaciones CUC</title>
+  <!-- NUEVAS LÍNEAS -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <!-- FIN NUEVAS LÍNEAS -->
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Gestión de Usuarios</span>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" onclick="openModal('userModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nuevo Usuario
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Búsqueda -->
+      <div class="flex items-center gap-2 mb-4">
+        <input type="text" id="search" class="form-control" style="max-width:300px"
+          placeholder="Buscar por nombre, cédula o email..." oninput="renderTable()"/>
+        <span id="countLabel" class="text-sm text-muted"></span>
+      </div>
+
+      <div class="card">
+        <div id="loadingState" class="loading"><div class="spinner"></div></div>
+        <div class="table-wrap" id="tableWrap" style="display:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Cédula</th>
+                <th>Nombre</th>
+                <th>Email</th>
+                <th>Rol</th>
+                <th>Departamento</th>
+                <th>Tipo Nombramiento</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="empty-state" style="display:none">
+          <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width:48px;height:48px;margin:0 auto 12px;display:block;opacity:.3"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          <p>No hay usuarios que mostrar.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modal Nuevo Usuario -->
+  <div class="modal-overlay" id="userModal">
+    <div class="modal" style="max-width:540px">
+      <div class="modal-header">
+        <span class="modal-title">Nuevo Usuario</span>
+        <button class="modal-close" onclick="closeModal('userModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:16px;height:16px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="userAlert" class="alert"></div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label" for="uCedula">Cédula *</label>
+            <input type="text" id="uCedula" class="form-control" placeholder="1-0000-0000"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uEmail">Correo *</label>
+            <input type="email" id="uEmail" class="form-control" placeholder="correo@cuc.ac.cr"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uNombre">Nombre *</label>
+            <input type="text" id="uNombre" class="form-control"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uApellidos">Apellidos *</label>
+            <input type="text" id="uApellidos" class="form-control"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uPassword">Contraseña *</label>
+            <input type="password" id="uPassword" class="form-control" placeholder="Mínimo 8 caracteres"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uRol">Rol *</label>
+            <select id="uRol" class="form-control">
+              <option value="">Seleccione...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uDep">Departamento *</label>
+            <select id="uDep" class="form-control">
+              <option value="">Seleccione...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="uTipo">Tipo de Nombramiento *</label>
+            <select id="uTipo" class="form-control">
+              <option value="">Seleccione...</option>
+            </select>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-3);padding:8px 12px;background:var(--surface-2);border-radius:6px">
+          Se creará con un saldo inicial de 15 días de vacaciones para el año en curso.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('userModal')">Cancelar</button>
+        <button class="btn btn-primary" id="saveUserBtn" onclick="saveUser()">Crear Usuario</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let allUsers = [];
+
+    function renderTable() {
+      const q = document.getElementById('search').value.toLowerCase();
+      const data = q ? allUsers.filter(u =>
+        u.nombre.toLowerCase().includes(q) ||
+        u.apellidos.toLowerCase().includes(q) ||
+        u.cedula.toLowerCase().includes(q) ||
+        (u.email || '').toLowerCase().includes(q)
+      ) : allUsers;
+
+      document.getElementById('countLabel').textContent = `${data.length} usuario${data.length !== 1 ? 's' : ''}`;
+
+      if (!data.length) {
+        document.getElementById('tableWrap').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+        return;
+      }
+      document.getElementById('tableWrap').style.display = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+
+      document.getElementById('tableBody').innerHTML = data.map(u => `
+        <tr>
+          <td class="font-mono text-sm">${u.cedula}</td>
+          <td><strong>${u.nombre} ${u.apellidos}</strong></td>
+          <td class="text-sm text-muted">${u.email || '—'}</td>
+          <td><span class="role-badge">${u.rol}</span></td>
+          <td class="text-sm">${u.departamento}</td>
+          <td class="text-sm text-muted">${u.tipo_nombramiento}</td>
+          <td>
+            <span class="badge ${u.activo ? 'badge-approved' : 'badge-rejected'}">
+              ${u.activo ? 'Activo' : 'Inactivo'}
+            </span>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function saveUser() {
+      const body = {
+        cedula: document.getElementById('uCedula').value.trim(),
+        nombre: document.getElementById('uNombre').value.trim(),
+        apellidos: document.getElementById('uApellidos').value.trim(),
+        email: document.getElementById('uEmail').value.trim(),
+        password: document.getElementById('uPassword').value,
+        id_rol: document.getElementById('uRol').value,
+        id_departamento: document.getElementById('uDep').value,
+        id_tipo_nombramiento: document.getElementById('uTipo').value,
+      };
+
+      const alert = document.getElementById('userAlert');
+      alert.classList.remove('show');
+
+      if (!body.cedula || !body.nombre || !body.apellidos || !body.email || !body.password || !body.id_rol || !body.id_departamento || !body.id_tipo_nombramiento) {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'Todos los campos son obligatorios.';
+        return;
+      }
+
+      const btn = document.getElementById('saveUserBtn');
+      btn.disabled = true; btn.textContent = 'Guardando...';
+
+      try {
+        const res = await fetch('/api/usuarios', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert.className = 'alert alert-error show';
+          alert.textContent = data.error || 'Error al crear usuario.';
+        } else {
+          closeModal('userModal');
+          await loadUsers();
+        }
+      } catch {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'Error de conexión.';
+      }
+      btn.disabled = false; btn.textContent = 'Crear Usuario';
+    }
+
+    async function loadUsers() {
+      const res = await fetch('/api/usuarios');
+      allUsers = await res.json();
+      document.getElementById('loadingState').style.display = 'none';
+      renderTable();
+    }
+
+    async function loadSelects() {
+      const [rolesRes, depsRes, tiposRes] = await Promise.all([
+        fetch('/api/roles'),
+        fetch('/api/departamentos'),
+        fetch('/api/tipos-nombramiento'),
+      ]);
+      const roles = await rolesRes.json();
+      const deps = await depsRes.json();
+      const tipos = await tiposRes.json();
+
+      document.getElementById('uRol').innerHTML = '<option value="">Seleccione...</option>' +
+        roles.map(r => `<option value="${r.id_rol}">${r.nombre}</option>`).join('');
+      document.getElementById('uDep').innerHTML = '<option value="">Seleccione...</option>' +
+        deps.map(d => `<option value="${d.id_departamento}">${d.nombre}</option>`).join('');
+      document.getElementById('uTipo').innerHTML = '<option value="">Seleccione...</option>' +
+        tipos.map(t => `<option value="${t.id_tipo_nombramiento}">${t.nombre}</option>`).join('');
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      if (!['RRHH', 'Administrador'].includes(user.rol)) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      buildSidebar('usuarios');
+      await Promise.all([loadUsers(), loadSelects()]);
+    }
+    init();
+  </script>
+</body>
+</html>

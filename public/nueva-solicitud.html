@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Nueva Solicitud — Vacaciones CUC</title>
+  <!-- NUEVAS LÍNEAS -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <!-- FIN NUEVAS LÍNEAS -->
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Nueva Solicitud de Vacaciones</span>
+    </div>
+
+    <div class="content" style="max-width:700px">
+      <!-- Saldo info -->
+      <div class="card mb-6">
+        <div class="card-body" style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+          <div>
+            <div class="stat-label" style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin-bottom:2px">Días disponibles</div>
+            <div style="font-size:28px;font-weight:700;color:var(--accent)" id="diasDisponibles">—</div>
+          </div>
+          <div style="flex:1;min-width:200px">
+            <div style="background:var(--surface-2);border-radius:8px;height:8px;overflow:hidden">
+              <div id="saldoBar" style="height:100%;background:var(--accent);border-radius:8px;width:0%;transition:width .4s"></div>
+            </div>
+            <div class="text-sm text-muted" style="margin-top:4px" id="saldoLabel">Cargando saldo...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Form -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Datos de la Solicitud</span>
+        </div>
+        <div class="card-body">
+          <div id="alertMsg" class="alert"></div>
+          <div id="successMsg" class="alert alert-success"></div>
+
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label" for="fechaInicio">Fecha de Inicio *</label>
+              <input type="date" id="fechaInicio" class="form-control" onchange="calcDias()"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="fechaFin">Fecha de Fin *</label>
+              <input type="date" id="fechaFin" class="form-control" onchange="calcDias()"/>
+            </div>
+          </div>
+
+          <!-- Preview dias -->
+          <div id="preview" style="display:none;margin-bottom:18px;padding:14px 16px;background:var(--accent-light);border-radius:8px;border:1px solid rgba(26,86,219,0.15)">
+            <div style="font-size:12px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Resumen</div>
+            <div style="font-size:22px;font-weight:700;color:var(--accent)"><span id="previewDias">0</span> días hábiles</div>
+            <div class="text-sm text-muted" id="previewRango"></div>
+            <div id="previewWarning" class="text-sm" style="color:var(--danger);margin-top:6px;display:none"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="observaciones">Observaciones (opcional)</label>
+            <textarea id="observaciones" class="form-control" placeholder="Motivo o comentario adicional..."></textarea>
+          </div>
+
+          <div style="display:flex;gap:10px;justify-content:flex-end">
+            <a href="/solicitudes" class="btn btn-secondary">Cancelar</a>
+            <button class="btn btn-primary" id="submitBtn" onclick="submitSolicitud()" disabled>
+              Enviar Solicitud
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Info box -->
+      <div style="margin-top:16px;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
+        <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">Proceso de aprobación</div>
+        <div style="display:flex;gap:0;flex-direction:column">
+          <div class="flex items-center gap-2 text-sm text-muted" style="padding:4px 0">
+            <span style="width:20px;height:20px;background:var(--warning-light);color:var(--warning);border-radius:50%;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">1</span>
+            Solicitud enviada → revisión por Jefatura
+          </div>
+          <div class="flex items-center gap-2 text-sm text-muted" style="padding:4px 0">
+            <span style="width:20px;height:20px;background:var(--info-light);color:var(--info);border-radius:50%;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">2</span>
+            Aprobada por Jefatura → revisión por RRHH
+          </div>
+          <div class="flex items-center gap-2 text-sm text-muted" style="padding:4px 0">
+            <span style="width:20px;height:20px;background:var(--success-light);color:var(--success);border-radius:50%;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">3</span>
+            Aprobada por RRHH → días descontados del saldo
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    let diasDisponibles = 0;
+
+    function calcDias() {
+      const inicio = document.getElementById('fechaInicio').value;
+      const fin = document.getElementById('fechaFin').value;
+
+      if (!inicio || !fin) {
+        document.getElementById('preview').style.display = 'none';
+        document.getElementById('submitBtn').disabled = true;
+        return;
+      }
+
+      const d1 = new Date(inicio + 'T00:00:00');
+      const d2 = new Date(fin + 'T00:00:00');
+
+      if (d2 < d1) {
+        document.getElementById('preview').style.display = 'none';
+        document.getElementById('submitBtn').disabled = true;
+        return;
+      }
+
+      let dias = 0;
+      const current = new Date(d1);
+      while (current <= d2) {
+        const dw = current.getDay();
+        if (dw !== 0 && dw !== 6) dias++;
+        current.setDate(current.getDate() + 1);
+      }
+
+      document.getElementById('preview').style.display = 'block';
+      document.getElementById('previewDias').textContent = dias;
+      document.getElementById('previewRango').textContent =
+        `${d1.toLocaleDateString('es-CR')} al ${d2.toLocaleDateString('es-CR')}`;
+
+      const warn = document.getElementById('previewWarning');
+      if (dias > diasDisponibles) {
+        warn.style.display = 'block';
+        warn.textContent = `⚠ Excede su saldo disponible (${diasDisponibles} días).`;
+        document.getElementById('submitBtn').disabled = true;
+      } else {
+        warn.style.display = 'none';
+        document.getElementById('submitBtn').disabled = false;
+      }
+    }
+
+    async function submitSolicitud() {
+      const fecha_inicio = document.getElementById('fechaInicio').value;
+      const fecha_fin = document.getElementById('fechaFin').value;
+      const observaciones = document.getElementById('observaciones').value;
+      const btn = document.getElementById('submitBtn');
+      const alertMsg = document.getElementById('alertMsg');
+      const successMsg = document.getElementById('successMsg');
+
+      alertMsg.classList.remove('show');
+      successMsg.classList.remove('show');
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" style="border-top-color:#fff;border-color:rgba(255,255,255,.3);width:12px;height:12px"></span> Enviando...';
+
+      try {
+        const res = await fetch('/api/solicitudes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fecha_inicio, fecha_fin, observaciones })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alertMsg.textContent = data.error || 'Error al crear la solicitud.';
+          alertMsg.classList.add('show');
+          btn.disabled = false;
+          btn.textContent = 'Enviar Solicitud';
+        } else {
+          successMsg.textContent = `Solicitud #${data.id} creada exitosamente (${data.dias} días hábiles). Pendiente de aprobación.`;
+          successMsg.classList.add('show');
+          document.getElementById('fechaInicio').value = '';
+          document.getElementById('fechaFin').value = '';
+          document.getElementById('observaciones').value = '';
+          document.getElementById('preview').style.display = 'none';
+          btn.textContent = 'Enviar Solicitud';
+          // Refresh saldo
+          loadSaldo();
+        }
+      } catch {
+        alertMsg.textContent = 'Error de conexión.';
+        alertMsg.classList.add('show');
+        btn.disabled = false;
+        btn.textContent = 'Enviar Solicitud';
+      }
+    }
+
+    async function loadSaldo() {
+      const res = await fetch('/api/saldo');
+      const saldo = await res.json();
+      diasDisponibles = saldo.dias_disponibles || 0;
+      const total = (saldo.dias_tomados || 0) + diasDisponibles;
+      const pct = total > 0 ? (diasDisponibles / total) * 100 : 0;
+      document.getElementById('diasDisponibles').textContent = diasDisponibles;
+      document.getElementById('saldoBar').style.width = pct + '%';
+      document.getElementById('saldoLabel').textContent =
+        `${saldo.dias_tomados || 0} tomados · ${saldo.dias_pendientes || 0} en revisión`;
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      buildSidebar('nueva-solicitud');
+      await loadSaldo();
+      // Set min date to today
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('fechaInicio').min = today;
+      document.getElementById('fechaFin').min = today;
+    }
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Departamentos — Vacaciones CUC</title>
+  <!-- NUEVAS LÍNEAS -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <!-- FIN NUEVAS LÍNEAS -->
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Departamentos</span>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" onclick="openModal('depModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nuevo Departamento
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="flex items-center gap-2 mb-4">
+        <input type="text" id="search" class="form-control" style="max-width:280px"
+          placeholder="Buscar departamento..." oninput="renderCards()"/>
+        <span id="countLabel" class="text-sm text-muted"></span>
+      </div>
+
+      <div id="loadingState" class="loading"><div class="spinner"></div></div>
+
+      <div id="depGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px"></div>
+
+      <div id="emptyState" class="empty-state" style="display:none">
+        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width:48px;height:48px;margin:0 auto 12px;display:block;opacity:.3"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        <p>No hay departamentos que mostrar.</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modal Nuevo Departamento -->
+  <div class="modal-overlay" id="depModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">Nuevo Departamento</span>
+        <button class="modal-close" onclick="closeModal('depModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:16px;height:16px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="depAlert" class="alert"></div>
+        <div class="form-group">
+          <label class="form-label" for="dNombre">Nombre del Departamento *</label>
+          <input type="text" id="dNombre" class="form-control" placeholder="ej. Tecnología de Información"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="dDesc">Descripción</label>
+          <textarea id="dDesc" class="form-control" placeholder="Descripción opcional del departamento..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('depModal')">Cancelar</button>
+        <button class="btn btn-primary" id="saveDepBtn" onclick="saveDep()">Crear Departamento</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let allDeps = [];
+
+    // Color mapping per first letter for visual variety
+    const cardColors = [
+      { bg: '#e8f0fe', border: '#c7d8fb', text: '#1a56db' },
+      { bg: '#e6f7ef', border: '#b3e6ce', text: '#0b8a4a' },
+      { bg: '#fff8e6', border: '#ffe0a0', text: '#c17a00' },
+      { bg: '#fdf0ef', border: '#f5c6c2', text: '#c0392b' },
+      { bg: '#e6f4fb', border: '#b3ddf5', text: '#0077b6' },
+      { bg: '#f3f0fe', border: '#d4c6fb', text: '#6930c3' },
+    ];
+
+    function renderCards() {
+      const q = document.getElementById('search').value.toLowerCase();
+      const data = q ? allDeps.filter(d =>
+        d.nombre.toLowerCase().includes(q) ||
+        (d.descripcion || '').toLowerCase().includes(q)
+      ) : allDeps;
+
+      document.getElementById('countLabel').textContent = `${data.length} departamento${data.length !== 1 ? 's' : ''}`;
+
+      if (!data.length) {
+        document.getElementById('depGrid').innerHTML = '';
+        document.getElementById('emptyState').style.display = 'block';
+        return;
+      }
+      document.getElementById('emptyState').style.display = 'none';
+
+      document.getElementById('depGrid').innerHTML = data.map((d, i) => {
+        const c = cardColors[i % cardColors.length];
+        const initials = d.nombre.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+        return `
+          <div class="card" style="padding:20px;border-color:${c.border}">
+            <div style="display:flex;align-items:flex-start;gap:14px">
+              <div style="width:44px;height:44px;border-radius:10px;background:${c.bg};border:1px solid ${c.border};display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:${c.text};flex-shrink:0;font-family:'JetBrains Mono',monospace">
+                ${initials}
+              </div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;margin-bottom:4px">${d.nombre}</div>
+                <div class="text-sm text-muted" style="line-height:1.5">${d.descripcion || 'Sin descripción'}</div>
+              </div>
+            </div>
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+              <span class="font-mono text-sm text-muted">#${d.id_departamento}</span>
+              <span class="badge ${d.activo ? 'badge-approved' : 'badge-rejected'}">${d.activo ? 'Activo' : 'Inactivo'}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function saveDep() {
+      const nombre = document.getElementById('dNombre').value.trim();
+      const descripcion = document.getElementById('dDesc').value.trim();
+      const alert = document.getElementById('depAlert');
+      alert.classList.remove('show');
+
+      if (!nombre) {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'El nombre es obligatorio.';
+        return;
+      }
+
+      const btn = document.getElementById('saveDepBtn');
+      btn.disabled = true; btn.textContent = 'Guardando...';
+
+      try {
+        const res = await fetch('/api/departamentos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nombre, descripcion })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert.className = 'alert alert-error show';
+          alert.textContent = data.error || 'Error al crear departamento.';
+        } else {
+          closeModal('depModal');
+          document.getElementById('dNombre').value = '';
+          document.getElementById('dDesc').value = '';
+          await loadDeps();
+        }
+      } catch {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'Error de conexión.';
+      }
+      btn.disabled = false; btn.textContent = 'Crear Departamento';
+    }
+
+    async function loadDeps() {
+      const res = await fetch('/api/departamentos');
+      allDeps = await res.json();
+      document.getElementById('loadingState').style.display = 'none';
+      renderCards();
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      if (!['RRHH', 'Administrador'].includes(user.rol)) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      buildSidebar('departamentos');
+      await loadDeps();
+    }
+    init();
+  </script>
+</body>
+</html>

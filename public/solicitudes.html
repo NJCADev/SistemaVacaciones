@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mis Solicitudes — Vacaciones CUC</title>
+  <!-- NUEVAS LÍNEAS -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <!-- FIN NUEVAS LÍNEAS -->
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Mis Solicitudes</span>
+      <div class="topbar-actions">
+        <a href="/nueva-solicitud" class="btn btn-primary">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nueva Solicitud
+        </a>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Saldo rápido -->
+      <div class="stats-grid mb-6" style="grid-template-columns:repeat(3,1fr);max-width:600px">
+        <div class="stat-card accent">
+          <div class="stat-label">Disponibles</div>
+          <div class="stat-value" id="diasDisponibles">—</div>
+        </div>
+        <div class="stat-card success">
+          <div class="stat-label">Tomados</div>
+          <div class="stat-value" id="diasTomados">—</div>
+        </div>
+        <div class="stat-card warning">
+          <div class="stat-label">Pendientes</div>
+          <div class="stat-value" id="diasPendientes">—</div>
+        </div>
+      </div>
+
+      <!-- Filtros -->
+      <div class="flex items-center gap-2 mb-4">
+        <select id="filtroEstado" class="form-control" style="width:auto;padding-left:12px" onchange="renderTable()">
+          <option value="">Todos los estados</option>
+          <option value="Pendiente">Pendiente</option>
+          <option value="Aprobada Jefatura">Aprobada Jefatura</option>
+          <option value="Aprobada RRHH">Aprobada RRHH</option>
+          <option value="Rechazada">Rechazada</option>
+        </select>
+        <span id="countLabel" class="text-sm text-muted"></span>
+      </div>
+
+      <!-- Tabla -->
+      <div class="card">
+        <div id="loadingState" class="loading"><div class="spinner"></div></div>
+        <div class="table-wrap" id="tableWrap" style="display:none">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Fecha Inicio</th>
+                <th>Fecha Fin</th>
+                <th>Días</th>
+                <th>Estado</th>
+                <th>Observaciones</th>
+                <th>Revisado</th>
+                <th>Fecha Solicitud</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="empty-state" style="display:none">
+          <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width:48px;height:48px;margin:0 auto 12px;display:block;opacity:.3"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+          <p>No hay solicitudes que mostrar.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    let allSolicitudes = [];
+
+    function renderTable() {
+      const filtro = document.getElementById('filtroEstado').value;
+      const data = filtro ? allSolicitudes.filter(s => s.estado_nombre === filtro) : allSolicitudes;
+
+      document.getElementById('countLabel').textContent = `${data.length} solicitud${data.length !== 1 ? 'es' : ''}`;
+
+      if (!data.length) {
+        document.getElementById('tableWrap').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+        return;
+      }
+      document.getElementById('tableWrap').style.display = 'block';
+      document.getElementById('emptyState').style.display = 'none';
+
+      document.getElementById('tableBody').innerHTML = data.map(s => `
+        <tr>
+          <td class="font-mono text-sm text-muted">#${s.id_solicitud}</td>
+          <td>${formatDate(s.fecha_inicio)}</td>
+          <td>${formatDate(s.fecha_fin)}</td>
+          <td><strong>${s.dias_solicitados}</strong> día${s.dias_solicitados !== 1 ? 's' : ''}</td>
+          <td>${estadoBadge(s.estado_nombre)}</td>
+          <td class="text-sm text-muted" style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.observaciones_revision || s.observaciones || '—'}</td>
+          <td class="text-sm text-muted">${s.usuario_nombre ? s.usuario_nombre + ' ' + s.usuario_apellidos : '—'}</td>
+          <td class="text-sm text-muted">${formatDate(s.fecha_solicitud)}</td>
+        </tr>
+      `).join('');
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      buildSidebar('solicitudes');
+
+      const [saldoRes, solRes] = await Promise.all([
+        fetch('/api/saldo'),
+        fetch('/api/solicitudes')
+      ]);
+      const saldo = await saldoRes.json();
+      document.getElementById('diasDisponibles').textContent = saldo.dias_disponibles ?? 0;
+      document.getElementById('diasTomados').textContent = saldo.dias_tomados ?? 0;
+      document.getElementById('diasPendientes').textContent = saldo.dias_pendientes ?? 0;
+
+      allSolicitudes = await solRes.json();
+      document.getElementById('loadingState').style.display = 'none';
+      renderTable();
+    }
+    init();
+  </script>
+</body>
+</html>
