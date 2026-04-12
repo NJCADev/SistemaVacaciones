@@ -111,10 +111,22 @@ function closeModal(id) {
 // Estado → badge
 function estadoBadge(estado) {
   const map = {
-    'Pendiente': 'badge-pending',
-    'Aprobada Jefatura': 'badge-info',
-    'Aprobada RRHH': 'badge-approved',
-    'Rechazada': 'badge-rejected',
+    'pendiente': 'badge-pending',
+    'aprobada_jefatura': 'badge-info',
+    'aprobada_rrhh': 'badge-approved',
+    'rechazada': 'badge-rejected',
+    'programada': 'badge-info',
+    'retirada': 'badge-gray',
+    'ejecutada': 'badge-approved'
   };
-  return `<span class="badge ${map[estado] || 'badge-gray'}">${estado}</span>`;
+  const texto = {
+    'pendiente': 'Pendiente',
+    'aprobada_jefatura': 'Aprob. Jefatura',
+    'aprobada_rrhh': 'Aprob. RRHH',
+    'rechazada': 'Rechazada',
+    'programada': 'Programada',
+    'retirada': 'Retirada',
+    'ejecutada': 'Ejecutada'
+  }[estado] || estado;
+  return `<span class="badge ${map[estado] || 'badge-gray'}">${texto}</span>`;
 }

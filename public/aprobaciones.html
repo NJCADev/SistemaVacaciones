@@ -31,10 +31,10 @@
       <div class="flex items-center gap-2 mb-4" style="flex-wrap:wrap">
         <select id="filtroEstado" class="form-control" style="width:auto;padding-left:12px" onchange="renderTable()">
           <option value="">Todos los estados</option>
-          <option value="Pendiente" selected>Pendiente</option>
-          <option value="Aprobada Jefatura">Aprobada Jefatura</option>
-          <option value="Aprobada RRHH">Aprobada RRHH</option>
-          <option value="Rechazada">Rechazada</option>
+          <option value="pendiente" selected>Pendiente</option>
+          <option value="aprobada_jefatura">Aprobada por Jefatura</option>
+          <option value="aprobada_rrhh">Aprobada por RRHH</option>
+          <option value="rechazada">Rechazada</option>
         </select>
         <span id="countLabel" class="text-sm text-muted"></span>
       </div>
@@ -105,7 +105,8 @@
 
     function renderTable() {
       const filtro = document.getElementById('filtroEstado').value;
-      const data = filtro ? allSolicitudes.filter(s => s.estado_nombre === filtro) : allSolicitudes;
+      let data = filtro ? allSolicitudes.filter(s => s.estado === filtro) : allSolicitudes;
+      
       document.getElementById('countLabel').textContent = `${data.length} solicitud${data.length !== 1 ? 'es' : ''}`;
 
       if (!data.length) {
@@ -119,11 +120,7 @@
 
       const user = currentUser;
       document.getElementById('tableBody').innerHTML = data.map(s => {
-        const isPending = s.estado_nombre === 'Pendiente';
-        const isJefApproved = s.estado_nombre === 'Aprobada Jefatura';
-        const canAct =
-          (isPending && ['Jefatura', 'RRHH', 'Administrador'].includes(user.rol)) ||
-          (isJefApproved && ['RRHH', 'Administrador'].includes(user.rol));
+        const canAct = true; // Ya filtramos por estado válido
 
         return `
           <tr>
@@ -133,14 +130,12 @@
             <td>${formatDate(s.fecha_inicio)}</td>
             <td>${formatDate(s.fecha_fin)}</td>
             <td><strong>${s.dias_solicitados}</strong></td>
-            <td>${estadoBadge(s.estado_nombre)}</td>
+            <td>${estadoBadge(s.estado)}</td>
             <td class="text-sm text-muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.observaciones || '—'}</td>
             <td>
-              ${canAct ? `
-                <button class="btn btn-primary btn-sm" onclick="openReview(${s.id_solicitud})">
-                  Revisar
-                </button>
-              ` : `<span class="text-muted text-sm">—</span>`}
+              <button class="btn btn-primary btn-sm" onclick="openReview(${s.id_solicitud})">
+                Revisar
+              </button>
             </td>
           </tr>
         `;
@@ -200,6 +195,17 @@
 
       const res = await fetch('/api/solicitudes');
       allSolicitudes = await res.json();
+      
+      // Filtrar según rol para mostrar en aprobaciones
+      const user = currentUser;
+      if (user.rol === 'Jefatura') {
+        // Jefatura solo ve pendientes de su depto (ya filtrado en backend, pero por si acaso)
+        allSolicitudes = allSolicitudes.filter(s => s.estado === 'pendiente');
+      } else if (user.rol === 'RRHH' || user.rol === 'Administrador') {
+        // RRHH ve aprobadas por jefatura (y opcionalmente pendientes)
+        allSolicitudes = allSolicitudes.filter(s => s.estado === 'aprobada_jefatura' || s.estado === 'pendiente');
+      }
+      
       document.getElementById('loadingState').style.display = 'none';
       renderTable();
     }

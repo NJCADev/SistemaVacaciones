@@ -217,23 +217,47 @@ app.get('/api/saldo', authenticateToken, async (req, res) => {
 
 app.get('/api/solicitudes', authenticateToken, async (req, res) => {
   try {
-    // Solo solicitudes del usuario
-    const [solicitudes] = await pool.execute(
-      `SELECT id_solicitud, fecha_inicio, fecha_fin, dias_solicitados, 
-              estado, observaciones, fecha_solicitud
-       FROM solicitudes_vacaciones
-       WHERE id_usuario = ?
-       ORDER BY fecha_solicitud DESC`,
-      [req.user.id_usuario]
-    );
+    const rol = req.user.rol_nombre;
+    let query = `
+      SELECT s.id_solicitud, s.fecha_inicio, s.fecha_fin, s.dias_solicitados, 
+             s.estado, s.observaciones, s.fecha_solicitud,
+             u.nombre_completo AS usuario_nombre,
+             d.nombre_unidad AS departamento_nombre
+      FROM solicitudes_vacaciones s
+      JOIN usuarios u ON s.id_usuario = u.id_usuario
+      JOIN departamentos d ON u.id_departamento = d.id_departamento
+    `;
+    let params = [];
+    let conditions = [];
+
+    if (rol === 'Funcionario') {
+      conditions.push('s.id_usuario = ?');
+      params.push(req.user.id_usuario);
+    } else if (rol === 'Jefatura') {
+      // Jefatura ve solo las solicitudes de su departamento
+      conditions.push('u.id_departamento = ?');
+      params.push(req.user.id_departamento);
+    }
+    // RRHH y Administrador ven todas (sin condiciones adicionales)
+
+    if (conditions.length) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    query += ' ORDER BY s.fecha_solicitud DESC';
     
-    // Mapear estado ENUM a nombres esperados por el frontend
-    const resultado = solicitudes.map(s => ({
-      ...s,
-      estado_nombre: s.estado,
-      usuario_nombre: req.user.nombre,
-      usuario_apellidos: req.user.apellidos
-    }));
+    const [solicitudes] = await pool.execute(query, params);
+    
+    // Dividir nombre_completo para el frontend
+    const resultado = solicitudes.map(s => {
+      const partes = (s.usuario_nombre || '').split(' ');
+      return {
+        ...s,
+        usuario_nombre: partes[0] || '',
+        usuario_apellidos: partes.slice(1).join(' ') || '',
+        estado_nombre: s.estado  // compatibilidad con frontend
+      };
+    });
     
     res.json(resultado);
   } catch (error) {
@@ -290,8 +314,12 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'RRHH
     const { id } = req.params;
     const { accion, observaciones } = req.body;
 
+    // Obtener la solicitud actual
     const [solicitudes] = await pool.execute(
-      'SELECT * FROM solicitudes_vacaciones WHERE id_solicitud = ?',
+      `SELECT s.*, u.id_departamento AS usuario_depto
+       FROM solicitudes_vacaciones s
+       JOIN usuarios u ON s.id_usuario = u.id_usuario
+       WHERE s.id_solicitud = ?`,
       [id]
     );
 
@@ -300,33 +328,55 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'RRHH
     }
 
     const solicitud = solicitudes[0];
-    let nuevoEstado;
+    const usuarioRol = req.user.rol_nombre;
+    const usuarioId = req.user.id_usuario;
 
-    if (accion === 'aprobar') {
-      if (req.user.rol_nombre === 'Jefatura') {
-        nuevoEstado = 'aprobada';
-      } else {
-        nuevoEstado = 'aprobada'; 
-        // Descontar saldo
-        await pool.execute(
-          `UPDATE saldo_vacaciones 
-           SET saldo_actual = saldo_actual - ?
-           WHERE id_usuario = ? AND periodo_anio = YEAR(CURDATE())`,
-          [solicitud.dias_solicitados, solicitud.id_usuario]
-        );
-      }
-    } else {
-      nuevoEstado = 'rechazada';
+    // Validar que no se apruebe a sí mismo
+    if (accion === 'aprobar' && solicitud.id_usuario === usuarioId) {
+      return res.status(403).json({ error: 'No puede aprobar su propia solicitud.' });
     }
 
+    let nuevoEstado = null;
+
+    if (accion === 'aprobar') {
+      // Lógica según rol
+      if (usuarioRol === 'Jefatura') {
+        // Jefatura solo puede aprobar solicitudes en estado 'pendiente' de su departamento
+        if (solicitud.estado !== 'pendiente') {
+          return res.status(400).json({ error: 'La solicitud no está pendiente.' });
+        }
+        if (solicitud.usuario_depto !== req.user.id_departamento) {
+          return res.status(403).json({ error: 'No tiene permiso para aprobar solicitudes de otro departamento.' });
+        }
+        nuevoEstado = 'aprobada_jefatura';
+      } else if (usuarioRol === 'RRHH' || usuarioRol === 'Administrador') {
+        // RRHH puede aprobar solicitudes en 'aprobada_jefatura' (o 'pendiente' si se requiere)
+        if (solicitud.estado !== 'aprobada_jefatura' && solicitud.estado !== 'pendiente') {
+          return res.status(400).json({ error: 'La solicitud no está en un estado válido para aprobación por RRHH.' });
+        }
+        nuevoEstado = 'aprobada_rrhh';
+      } else {
+        return res.status(403).json({ error: 'Rol no autorizado para aprobar.' });
+      }
+    } else if (accion === 'rechazar') {
+      // Cualquiera de los roles autorizados puede rechazar
+      if (usuarioRol === 'Jefatura' && solicitud.usuario_depto !== req.user.id_departamento) {
+        return res.status(403).json({ error: 'No tiene permiso para rechazar solicitudes de otro departamento.' });
+      }
+      nuevoEstado = 'rechazada';
+    } else {
+      return res.status(400).json({ error: 'Acción no válida.' });
+    }
+
+    // Actualizar la solicitud
     await pool.execute(
       `UPDATE solicitudes_vacaciones 
        SET estado = ?, comentario_aprobador = ?, fecha_resolucion = NOW(), id_aprobador = ? 
        WHERE id_solicitud = ?`,
-      [nuevoEstado, observaciones || null, req.user.id_usuario, id]
+      [nuevoEstado, observaciones || null, usuarioId, id]
     );
 
-    res.json({ success: true });
+    res.json({ success: true, nuevoEstado });
   } catch (error) {
     console.error('Error actualizando solicitud:', error);
     res.status(500).json({ error: 'Error del servidor' });
