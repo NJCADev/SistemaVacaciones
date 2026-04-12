@@ -47,11 +47,10 @@ function buildSidebar(activeItem) {
     { id: 'dashboard', href: '/dashboard', label: 'Inicio', icon: Icons.home, roles: null },
     { id: 'solicitudes', href: '/solicitudes', label: 'Mis Solicitudes', icon: Icons.list, roles: null },
     { id: 'nueva-solicitud', href: '/nueva-solicitud', label: 'Nueva Solicitud', icon: Icons.plus, roles: null },
-    { id: 'aprobaciones', href: '/aprobaciones', label: 'Aprobaciones', icon: Icons.check, roles: ['Jefatura', 'RRHH', 'Administrador'] },
-    { id: 'usuarios', href: '/usuarios', label: 'Usuarios', icon: Icons.users, roles: ['RRHH', 'Administrador'] },
-    { id: 'departamentos', href: '/departamentos', label: 'Departamentos', icon: Icons.building, roles: ['RRHH', 'Administrador'] },
+    { id: 'aprobaciones', href: '/aprobaciones', label: 'Aprobaciones', icon: Icons.check, roles: ['Jefatura', 'Recursos Humanos', 'Administrador'] },
+    { id: 'usuarios', href: '/usuarios', label: 'Usuarios', icon: Icons.users, roles: ['Recursos Humanos', 'Administrador'] },
+    { id: 'departamentos', href: '/departamentos', label: 'Departamentos', icon: Icons.building, roles: ['Recursos Humanos', 'Administrador'] },
   ];
-
   const filtered = navItems.filter(i => !i.roles || i.roles.includes(user.rol));
 
   const nav = filtered.map(i => `

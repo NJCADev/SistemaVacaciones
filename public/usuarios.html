@@ -4,11 +4,9 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Usuarios — Vacaciones CUC</title>
-  <!-- NUEVAS LÍNEAS -->
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <!-- FIN NUEVAS LÍNEAS -->
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="css/style.css"/>
 </head>
@@ -27,10 +25,13 @@
     </div>
 
     <div class="content">
-      <!-- Búsqueda -->
       <div class="flex items-center gap-2 mb-4">
         <input type="text" id="search" class="form-control" style="max-width:300px"
           placeholder="Buscar por nombre, cédula o email..." oninput="renderTable()"/>
+        <button class="btn btn-secondary btn-sm" onclick="clearSearch()">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Limpiar
+        </button>
         <span id="countLabel" class="text-sm text-muted"></span>
       </div>
 
@@ -47,6 +48,7 @@
                 <th>Departamento</th>
                 <th>Tipo Nombramiento</th>
                 <th>Estado</th>
+                <th>Acciones</th>
               </tr>
             </thead>
             <tbody id="tableBody"></tbody>
@@ -112,7 +114,7 @@
           </div>
         </div>
         <div style="font-size:11px;color:var(--text-3);padding:8px 12px;background:var(--surface-2);border-radius:6px">
-          Se creará con un saldo inicial de 15 días de vacaciones para el año en curso.
+          Se creará con saldo calculado según reglas institucionales.
         </div>
       </div>
       <div class="modal-footer">
@@ -126,12 +128,17 @@
   <script>
     let allUsers = [];
 
+    function clearSearch() {
+      document.getElementById('search').value = '';
+      renderTable();
+    }
+
     function renderTable() {
       const q = document.getElementById('search').value.toLowerCase();
       const data = q ? allUsers.filter(u =>
-        u.nombre.toLowerCase().includes(q) ||
-        u.apellidos.toLowerCase().includes(q) ||
-        u.cedula.toLowerCase().includes(q) ||
+        (u.nombre || '').toLowerCase().includes(q) ||
+        (u.apellidos || '').toLowerCase().includes(q) ||
+        (u.cedula || '').toLowerCase().includes(q) ||
         (u.email || '').toLowerCase().includes(q)
       ) : allUsers;
 
@@ -147,19 +154,39 @@
 
       document.getElementById('tableBody').innerHTML = data.map(u => `
         <tr>
-          <td class="font-mono text-sm">${u.cedula}</td>
-          <td><strong>${u.nombre} ${u.apellidos}</strong></td>
+          <td class="font-mono text-sm">${u.cedula || ''}</td>
+          <td><strong>${u.nombre || ''} ${u.apellidos || ''}</strong></td>
           <td class="text-sm text-muted">${u.email || '—'}</td>
-          <td><span class="role-badge">${u.rol}</span></td>
-          <td class="text-sm">${u.departamento}</td>
-          <td class="text-sm text-muted">${u.tipo_nombramiento}</td>
+          <td><span class="role-badge">${u.rol || ''}</span></td>
+          <td class="text-sm">${u.departamento || ''}</td>
+          <td class="text-sm text-muted">${u.tipo_nombramiento || ''}</td>
           <td>
             <span class="badge ${u.activo ? 'badge-approved' : 'badge-rejected'}">
               ${u.activo ? 'Activo' : 'Inactivo'}
             </span>
           </td>
+          <td>
+            <button class="btn btn-sm btn-secondary" onclick="recalcularSaldo(${u.id_usuario})" title="Recalcular saldo">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:12px;height:12px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+            </button>
+          </td>
         </tr>
       `).join('');
+    }
+
+    async function recalcularSaldo(idUsuario) {
+      if (!confirm('¿Está seguro de recalcular el saldo de vacaciones para este usuario?')) return;
+      try {
+        const res = await fetch(`/api/saldo/recalcular/${idUsuario}`, { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Saldo recalculado correctamente.\nSaldo actual: ${data.saldo.saldo_actual} días.`);
+        } else {
+          alert('Error: ' + (data.error || 'No se pudo recalcular'));
+        }
+      } catch (err) {
+        alert('Error de conexión');
+      }
     }
 
     async function saveUser() {
@@ -208,39 +235,56 @@
     }
 
     async function loadUsers() {
-      const res = await fetch('/api/usuarios');
-      allUsers = await res.json();
+      try {
+        const res = await fetch('/api/usuarios');
+        if (!res.ok) throw new Error('Error al cargar usuarios');
+        allUsers = await res.json();
+      } catch (err) {
+        console.error(err);
+        allUsers = [];
+      }
       document.getElementById('loadingState').style.display = 'none';
       renderTable();
     }
 
     async function loadSelects() {
-      const [rolesRes, depsRes, tiposRes] = await Promise.all([
-        fetch('/api/roles'),
-        fetch('/api/departamentos'),
-        fetch('/api/tipos-nombramiento'),
-      ]);
-      const roles = await rolesRes.json();
-      const deps = await depsRes.json();
-      const tipos = await tiposRes.json();
+      try {
+        const [rolesRes, depsRes, tiposRes] = await Promise.all([
+          fetch('/api/roles'),
+          fetch('/api/departamentos'),
+          fetch('/api/tipos-nombramiento'),
+        ]);
+        const roles = await rolesRes.json();
+        const deps = await depsRes.json();
+        const tipos = await tiposRes.json();
 
-      document.getElementById('uRol').innerHTML = '<option value="">Seleccione...</option>' +
-        roles.map(r => `<option value="${r.id_rol}">${r.nombre}</option>`).join('');
-      document.getElementById('uDep').innerHTML = '<option value="">Seleccione...</option>' +
-        deps.map(d => `<option value="${d.id_departamento}">${d.nombre}</option>`).join('');
-      document.getElementById('uTipo').innerHTML = '<option value="">Seleccione...</option>' +
-        tipos.map(t => `<option value="${t.id_tipo_nombramiento}">${t.nombre}</option>`).join('');
+        document.getElementById('uRol').innerHTML = '<option value="">Seleccione...</option>' +
+          roles.map(r => `<option value="${r.id_rol}">${r.nombre}</option>`).join('');
+        document.getElementById('uDep').innerHTML = '<option value="">Seleccione...</option>' +
+          deps.map(d => `<option value="${d.id_departamento}">${d.nombre}</option>`).join('');
+        document.getElementById('uTipo').innerHTML = '<option value="">Seleccione...</option>' +
+          tipos.map(t => `<option value="${t.id_tipo_nombramiento}">${t.nombre}</option>`).join('');
+      } catch (err) {
+        console.error('Error cargando selectores:', err);
+      }
     }
 
     async function init() {
-      const user = await loadSession();
-      if (!user) return;
-      if (!['RRHH', 'Administrador'].includes(user.rol)) {
-        window.location.href = '/dashboard';
-        return;
+      try {
+        const user = await loadSession();
+        if (!user) return;
+        if (!['Recursos Humanos', 'Administrador'].includes(user.rol)) {
+          window.location.href = '/dashboard';
+          return;
+        }
+        buildSidebar('usuarios');
+        await Promise.all([loadUsers(), loadSelects()]);
+      } catch (error) {
+        console.error('Error en init:', error);
+        document.getElementById('loadingState').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+        document.querySelector('#emptyState p').textContent = 'Error al cargar datos.';
       }
-      buildSidebar('usuarios');
-      await Promise.all([loadUsers(), loadSelects()]);
     }
     init();
   </script>

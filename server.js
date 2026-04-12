@@ -385,11 +385,11 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'RRHH
 
 // ==================== API USUARIOS ====================
 
-app.get('/api/usuarios', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
+app.get('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
   try {
     const [usuarios] = await pool.execute(
       `SELECT u.id_usuario, u.cedula_unica AS cedula, u.nombre_completo, u.correo_electronico AS email, 
-              u.estado_usuario AS activo,
+              u.estado_usuario,
               r.nombre_rol AS rol, d.nombre_unidad AS departamento, tn.nombre_tipo AS tipo_nombramiento
        FROM usuarios u
        JOIN roles r ON u.id_rol_actual = r.id_rol
@@ -398,13 +398,18 @@ app.get('/api/usuarios', authenticateToken, requireRole('RRHH', 'Administrador')
        ORDER BY u.nombre_completo`
     );
     
-    // Dividir nombre_completo para el frontend
     const usuariosFormateados = usuarios.map(u => {
-      const partes = u.nombre_completo.trim().split(' ');
+      const partes = (u.nombre_completo || '').trim().split(' ');
       return {
-        ...u,
+        id_usuario: u.id_usuario,
+        cedula: u.cedula,
         nombre: partes[0] || '',
         apellidos: partes.slice(1).join(' ') || '',
+        email: u.email,
+        rol: u.rol,
+        departamento: u.departamento,
+        tipo_nombramiento: u.tipo_nombramiento,
+        activo: u.estado_usuario === 'activo'   // booleano
       };
     });
     
@@ -429,14 +434,13 @@ app.post('/api/usuarios', authenticateToken, requireRole('RRHH', 'Administrador'
       [cedula, nombre_completo, email, id_rol, id_departamento, id_tipo_nombramiento, password_hash]
     );
 
-    // Inicializar saldo
-    await pool.execute(
-      `INSERT INTO saldo_vacaciones (id_usuario, periodo_anio, saldo_actual, saldo_inicial_periodo)
-       VALUES (?, YEAR(CURDATE()), 15, 15)`,
-      [result.insertId]
-    );
+    const idUsuario = result.insertId;
+    const anioActual = new Date().getFullYear();
+    
+    // Llamar al SP para calcular el saldo inicial según reglas
+    await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [idUsuario, anioActual]);
 
-    res.json({ success: true, id: result.insertId });
+    res.json({ success: true, id: idUsuario });
   } catch (error) {
     console.error('Error creando usuario:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -447,13 +451,10 @@ app.post('/api/usuarios', authenticateToken, requireRole('RRHH', 'Administrador'
 
 app.get('/api/departamentos', authenticateToken, async (req, res) => {
   try {
-    const [departamentos] = await pool.execute(
-      `SELECT id_departamento, nombre_unidad AS nombre, '' AS descripcion, activo 
-       FROM departamentos 
-       WHERE activo = 1 
-       ORDER BY nombre_unidad`
+    const [deptos] = await pool.execute(
+      'SELECT id_departamento, nombre_unidad AS nombre FROM departamentos WHERE activo = 1 ORDER BY nombre_unidad'
     );
-    res.json(departamentos);
+    res.json(deptos);
   } catch (error) {
     console.error('Error obteniendo departamentos:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -483,7 +484,9 @@ app.post('/api/departamentos', authenticateToken, requireRole('RRHH', 'Administr
 
 app.get('/api/roles', authenticateToken, async (req, res) => {
   try {
-    const [roles] = await pool.execute('SELECT * FROM roles ORDER BY nombre_rol');
+    const [roles] = await pool.execute(
+      'SELECT id_rol, nombre_rol AS nombre FROM roles ORDER BY nombre_rol'
+    );
     res.json(roles);
   } catch (error) {
     console.error('Error obteniendo roles:', error);
@@ -496,9 +499,7 @@ app.get('/api/roles', authenticateToken, async (req, res) => {
 app.get('/api/tipos-nombramiento', authenticateToken, async (req, res) => {
   try {
     const [tipos] = await pool.execute(
-      `SELECT id_tipo AS id_tipo_nombramiento, nombre_tipo AS nombre 
-       FROM tipo_nombramiento 
-       ORDER BY nombre_tipo`
+      'SELECT id_tipo AS id_tipo_nombramiento, nombre_tipo AS nombre FROM tipo_nombramiento ORDER BY nombre_tipo'
     );
     res.json(tipos);
   } catch (error) {
@@ -540,6 +541,71 @@ app.get('/api/estadisticas', authenticateToken, async (req, res) => {
     res.json(stats);
   } catch (error) {
     console.error('Error obteniendo estadísticas:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Recalcular saldo de un usuario específico
+app.post('/api/saldo/recalcular/:usuario_id', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
+  try {
+    const usuarioId = req.params.usuario_id;
+    const anio = req.query.anio || new Date().getFullYear();
+    
+    // Verificar que el usuario existe
+    const [users] = await pool.execute('SELECT id_usuario FROM usuarios WHERE id_usuario = ?', [usuarioId]);
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    
+    await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [usuarioId, anio]);
+    
+    // Obtener el nuevo saldo calculado
+    const [saldo] = await pool.execute(
+      `SELECT saldo_actual, saldo_inicial_periodo FROM saldo_vacaciones 
+       WHERE id_usuario = ? AND periodo_anio = ?`,
+      [usuarioId, anio]
+    );
+    
+    res.json({ 
+      success: true, 
+      message: 'Saldo recalculado correctamente',
+      saldo: saldo.length ? saldo[0] : { saldo_actual: 0, saldo_inicial_periodo: 0 }
+    });
+  } catch (error) {
+    console.error('Error recalculando saldo individual:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Recalcular saldo de todos los usuarios activos
+app.post('/api/saldo/recalcular-todos', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
+  try {
+    const anio = req.query.anio || new Date().getFullYear();
+    
+    // Obtener todos los usuarios activos
+    const [usuarios] = await pool.execute(
+      `SELECT id_usuario FROM usuarios WHERE estado_usuario = 'activo'`
+    );
+    
+    let procesados = 0;
+    let errores = [];
+    
+    for (const u of usuarios) {
+      try {
+        await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [u.id_usuario, anio]);
+        procesados++;
+      } catch (err) {
+        errores.push({ id_usuario: u.id_usuario, error: err.message });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Recálculo completado. ${procesados} usuarios procesados.`,
+      errores: errores.length ? errores : undefined
+    });
+  } catch (error) {
+    console.error('Error en recálculo masivo:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
