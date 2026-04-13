@@ -123,6 +123,10 @@ app.get('/perfil', (req, res) => {
 app.get('/auditoria', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'auditoria.html'));
 });
+
+app.get('/nombramientos', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'nombramientos.html'));
+});
 // ==================== API AUTH ====================
 
 app.post('/api/login', async (req, res) => {
@@ -417,9 +421,15 @@ app.post('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Ad
   try {
     const { cedula, nombre, apellidos, email, password, id_rol, id_departamento, id_tipo_nombramiento } = req.body;
     
-    // Validaciones básicas
+    // Validaciones básicas de campos obligatorios
     if (!cedula || !nombre || !apellidos || !email || !password || !id_rol || !id_departamento || !id_tipo_nombramiento) {
       return res.status(400).json({ error: 'Todos los campos son obligatorios.' });
+    }
+    
+    // V2: Validar formato de cédula (solo números, 9 a 12 dígitos)
+    const cedulaRegex = /^\d{9,12}$/;
+    if (!cedulaRegex.test(cedula)) {
+      return res.status(400).json({ error: 'La cédula debe contener solo números y tener entre 9 y 12 dígitos.' });
     }
     
     const nombre_completo = `${nombre} ${apellidos}`.trim();
@@ -439,9 +449,8 @@ app.post('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Ad
     // Calcular saldo inicial
     await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [idUsuario, anioActual]);
 
-    // --- ENVÍO DE CORREO DE BIENVENIDA (ROBUSTO) ---
+    // --- ENVÍO DE CORREO DE BIENVENIDA ---
     try {
-      // Obtener el correo y nombre desde la BD (por si acaso)
       const [newUser] = await pool.execute(
         'SELECT correo_electronico, nombre_completo FROM usuarios WHERE id_usuario = ?',
         [idUsuario]
@@ -470,12 +479,15 @@ app.post('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Ad
       }
     } catch (mailError) {
       console.error('⚠️ Error al intentar enviar correo de bienvenida:', mailError.message);
-      // No bloqueamos la respuesta al cliente
     }
 
     res.json({ success: true, id: idUsuario });
   } catch (error) {
     console.error('Error creando usuario:', error);
+    // Si es error de duplicado de cédula o correo
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ error: 'La cédula o el correo electrónico ya están registrados.' });
+    }
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -679,18 +691,61 @@ app.put('/api/perfil/contacto', authenticateToken, async (req, res) => {
 app.get('/api/departamentos', authenticateToken, async (req, res) => {
   try {
     const [deptos] = await pool.execute(
-      'SELECT id_departamento, nombre_unidad AS nombre FROM departamentos WHERE activo = 1 ORDER BY nombre_unidad'
+      `SELECT d.id_departamento, d.codigo_unico_4_digitos AS codigo, d.nombre_unidad AS nombre,
+              d.categoria_vacacional, d.activo, d.id_jefe_unidad,
+              u.nombre_completo AS jefe_nombre
+       FROM departamentos d
+       LEFT JOIN usuarios u ON d.id_jefe_unidad = u.id_usuario
+       ORDER BY d.nombre_unidad`
     );
-    res.json(deptos);
+    
+    const deptosFormateados = deptos.map(d => ({
+      id_departamento: d.id_departamento,
+      codigo: d.codigo || '—',
+      nombre: d.nombre,
+      categoria_vacacional: d.categoria_vacacional || 'No definida',
+      jefe_nombre: d.jefe_nombre || 'No asignado',
+      activo: d.activo === 1
+    }));
+    
+    res.json(deptosFormateados);
   } catch (error) {
     console.error('Error obteniendo departamentos:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
 
-app.post('/api/departamentos', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
+app.get('/api/departamentos/:id', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT d.id_departamento, d.codigo_unico_4_digitos, d.nombre_unidad, d.categoria_vacacional, d.id_jefe_unidad,
+              u.nombre_completo AS jefe_nombre
+       FROM departamentos d
+       LEFT JOIN usuarios u ON d.id_jefe_unidad = u.id_usuario
+       WHERE d.id_departamento = ?`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Departamento no encontrado' });
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error obteniendo departamento:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/departamentos', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
   try {
     const { nombre, descripcion } = req.body;
+    
+    if (!nombre) {
+      return res.status(400).json({ error: 'El nombre del departamento es obligatorio.' });
+    }
+    
+    // V-DEP-04: Validar caracteres especiales (solo letras, números y espacios)
+    const nombreRegex = /^[A-Za-z0-9áéíóúÁÉÍÓÚñÑ\s]+$/;
+    if (!nombreRegex.test(nombre)) {
+      return res.status(400).json({ error: 'El nombre del departamento solo puede contener letras, números y espacios.' });
+    }
     
     // Generar código único simple (puedes mejorar)
     const codigo = Math.floor(1000 + Math.random() * 9000).toString().padStart(4, '0');
@@ -703,6 +758,60 @@ app.post('/api/departamentos', authenticateToken, requireRole('RRHH', 'Administr
     res.json({ success: true, id: result.insertId });
   } catch (error) {
     console.error('Error creando departamento:', error);
+    // V-DEP-01: Mensaje amigable para duplicados
+    if (error.code === 'ER_DUP_ENTRY') {
+      // El mensaje de error de MySQL incluye el nombre de la clave duplicada
+      const duplicatedField = error.message.includes('codigo_unico_4_digitos') ? 'código' : 'nombre';
+      return res.status(400).json({ error: `El ${duplicatedField} ingresado ya existe.` });
+    }
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.put('/api/departamentos/:id', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id } = req.params;
+  const { nombre, categoria_vacacional, id_jefe_unidad } = req.body;
+  
+  try {
+    // Validaciones
+    if (!nombre || !categoria_vacacional) {
+      return res.status(400).json({ error: 'Nombre y categoría son obligatorios.' });
+    }
+    
+    // Validar caracteres especiales
+    const nombreRegex = /^[A-Za-z0-9áéíóúÁÉÍÓÚñÑ\s]+$/;
+    if (!nombreRegex.test(nombre)) {
+      return res.status(400).json({ error: 'El nombre solo puede contener letras, números y espacios.' });
+    }
+    
+    // Si se asigna jefe, verificar que tenga rol Jefatura (V-DEP-03)
+    if (id_jefe_unidad) {
+      const [jefe] = await pool.execute(
+        `SELECT 1 FROM usuarios u JOIN roles r ON u.id_rol_actual = r.id_rol 
+         WHERE u.id_usuario = ? AND r.nombre_rol = 'Jefatura' AND u.estado_usuario = 'activo'`,
+        [id_jefe_unidad]
+      );
+      if (!jefe.length) {
+        return res.status(400).json({ error: 'El funcionario asignado como jefe no tiene el rol de Jefatura activo.' });
+      }
+    }
+    
+    // Validar compatibilidad de categoría (V-DEP-02) - simplificada
+    // Asumimos que cualquier categoría puede ir en cualquier departamento, pero dejamos la validación si se requiere.
+    
+    await pool.execute(
+      `UPDATE departamentos 
+       SET nombre_unidad = ?, categoria_vacacional = ?, id_jefe_unidad = ?
+       WHERE id_departamento = ?`,
+      [nombre, categoria_vacacional, id_jefe_unidad || null, id]
+    );
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error actualizando departamento:', error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ error: 'El nombre ingresado ya existe.' });
+    }
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -796,6 +905,22 @@ app.get('/api/auditoria/tablas', authenticateToken, requireRole('Recursos Humano
   }
 });
 
+app.get('/api/usuarios/jefes', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT u.id_usuario, u.nombre_completo, u.cedula_unica
+       FROM usuarios u
+       JOIN roles r ON u.id_rol_actual = r.id_rol
+       WHERE r.nombre_rol = 'Jefatura' AND u.estado_usuario = 'activo'
+       ORDER BY u.nombre_completo`
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error obteniendo jefes:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ==================== API TIPOS NOMBRAMIENTO ====================
 
 app.get('/api/tipos-nombramiento', authenticateToken, async (req, res) => {
@@ -806,6 +931,109 @@ app.get('/api/tipos-nombramiento', authenticateToken, async (req, res) => {
     res.json(tipos);
   } catch (error) {
     console.error('Error obteniendo tipos de nombramiento:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/nombramientos', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id_usuario } = req.query;
+  try {
+    let query = `
+      SELECT n.id_nombramiento, n.id_usuario, n.id_tipo_nombramiento, tn.nombre_tipo AS tipo_nombramiento,
+             n.id_departamento, d.nombre_unidad AS departamento,
+             n.fecha_inicio, n.fecha_fin, n.activo,
+             u.nombre_completo, u.cedula_unica AS cedula
+      FROM nombramientos n
+      JOIN tipo_nombramiento tn ON n.id_tipo_nombramiento = tn.id_tipo
+      JOIN departamentos d ON n.id_departamento = d.id_departamento
+      JOIN usuarios u ON n.id_usuario = u.id_usuario
+    `;
+    const params = [];
+    if (id_usuario) {
+      query += ' WHERE n.id_usuario = ?';
+      params.push(id_usuario);
+    }
+    query += ' ORDER BY n.fecha_inicio DESC';
+    
+    const [rows] = await pool.execute(query, params);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error obteniendo nombramientos:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/nombramientos', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id_usuario, id_tipo_nombramiento, id_departamento, fecha_inicio, fecha_fin } = req.body;
+  
+  if (!id_usuario || !id_tipo_nombramiento || !id_departamento || !fecha_inicio) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios.' });
+  }
+  
+  // Validar fechas
+  if (fecha_fin && new Date(fecha_inicio) > new Date(fecha_fin)) {
+    return res.status(400).json({ error: 'La fecha de inicio no puede ser mayor que la fecha de fin.' });
+  }
+  
+  try {
+    // Desactivar nombramiento actual activo del usuario (si existe)
+    await pool.execute(
+      'UPDATE nombramientos SET activo = FALSE, fecha_fin = ? WHERE id_usuario = ? AND activo = TRUE',
+      [fecha_inicio, id_usuario]
+    );
+    
+    // Crear nuevo nombramiento
+    const [result] = await pool.execute(
+      `INSERT INTO nombramientos (id_usuario, id_tipo_nombramiento, id_departamento, fecha_inicio, fecha_fin, activo)
+       VALUES (?, ?, ?, ?, ?, TRUE)`,
+      [id_usuario, id_tipo_nombramiento, id_departamento, fecha_inicio, fecha_fin || null]
+    );
+    const idNombramiento = result.insertId;
+    
+    // Actualizar datos en tabla usuarios (opcional pero recomendado)
+    await pool.execute(
+      `UPDATE usuarios SET id_tipo_nombramiento = ?, id_departamento = ?, id_nombramiento_actual = ? WHERE id_usuario = ?`,
+      [id_tipo_nombramiento, id_departamento, idNombramiento, id_usuario]
+    );
+    
+    // Recalcular saldo debido al posible cambio de tipo/departamento
+    const anio = new Date().getFullYear();
+    await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [id_usuario, anio]);
+    
+    // Registrar en bitácora
+    await pool.execute(
+      `INSERT INTO bitacora_auditoria (id_usuario, tabla_afectada, operacion, valor_nuevo)
+       VALUES (?, 'nombramientos', 'INSERT', ?)`,
+      [req.user.id_usuario, JSON.stringify({ id_usuario, id_tipo_nombramiento, id_departamento, fecha_inicio })]
+    );
+    
+    res.json({ success: true, id: idNombramiento });
+  } catch (error) {
+    console.error('Error creando nombramiento:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.put('/api/nombramientos/:id/finalizar', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id } = req.params;
+  const { fecha_fin } = req.body;
+  
+  if (!fecha_fin) {
+    return res.status(400).json({ error: 'La fecha de fin es obligatoria.' });
+  }
+  
+  try {
+    await pool.execute(
+      'UPDATE nombramientos SET fecha_fin = ?, activo = FALSE WHERE id_nombramiento = ?',
+      [fecha_fin, id]
+    );
+    
+    // También actualizar usuario si es necesario
+    // (dejar id_nombramiento_actual en NULL o mantener hasta nuevo)
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error finalizando nombramiento:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -822,7 +1050,7 @@ app.get('/api/estadisticas', authenticateToken, async (req, res) => {
     );
     stats.misSolicitudes = misSolicitudes[0].total;
 
-    if (['Jefatura', 'RRHH', 'Administrador'].includes(req.user.rol_nombre)) {
+    if (['Jefatura', 'Recursos Humanos', 'Administrador'].includes(req.user.rol_nombre)) {
       const [pendientes] = await pool.execute(
         `SELECT COUNT(*) as total FROM solicitudes_vacaciones s
          JOIN usuarios u ON s.id_usuario = u.id_usuario
@@ -832,7 +1060,7 @@ app.get('/api/estadisticas', authenticateToken, async (req, res) => {
       stats.pendientesAprobacion = pendientes[0].total;
     }
 
-    if (['RRHH', 'Administrador'].includes(req.user.rol_nombre)) {
+    if (['Recursos Humanos', 'Administrador'].includes(req.user.rol_nombre)) {
       const [usuarios] = await pool.execute(`SELECT COUNT(*) as total FROM usuarios WHERE estado_usuario = 'activo'`);
       stats.totalUsuarios = usuarios[0].total;
 
@@ -848,7 +1076,7 @@ app.get('/api/estadisticas', authenticateToken, async (req, res) => {
 });
 
 // Recalcular saldo de un usuario específico
-app.post('/api/saldo/recalcular/:usuario_id', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
+app.post('/api/saldo/recalcular/:usuario_id', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
   try {
     const usuarioId = req.params.usuario_id;
     const anio = req.query.anio || new Date().getFullYear();
@@ -880,7 +1108,7 @@ app.post('/api/saldo/recalcular/:usuario_id', authenticateToken, requireRole('RR
 });
 
 // Recalcular saldo de todos los usuarios activos
-app.post('/api/saldo/recalcular-todos', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
+app.post('/api/saldo/recalcular-todos', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
   try {
     const anio = req.query.anio || new Date().getFullYear();
     

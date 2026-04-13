@@ -15,6 +15,7 @@ const Icons = {
   calendar: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`,
   user: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
   audit: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h6"/></svg>`,
+ briefcase: `<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>`,
 };
 
 // ---- Auth / Session ----
@@ -56,6 +57,7 @@ function buildSidebar(activeItem) {
     { id: 'vacaciones-colectivas', href: '/vacaciones-colectivas', label: 'Feriados', icon: Icons.calendar, roles: ['Recursos Humanos', 'Administrador'] },
     { id: 'perfil', href: '/perfil', label: 'Mi Perfil', icon: Icons.user, roles: null },
     { id: 'auditoria', href: '/auditoria', label: 'Auditoría', icon: Icons.audit, roles: ['Recursos Humanos', 'Administrador'] },
+    { id: 'nombramientos', href: '/nombramientos', label: 'Nombramientos', icon: Icons.briefcase, roles: ['Recursos Humanos', 'Administrador'] },
   ];
   const filtered = navItems.filter(i => !i.roles || i.roles.includes(user.rol));
 

@@ -448,14 +448,24 @@
       const alert = document.getElementById('userAlert');
       alert.classList.remove('show');
 
+      // Validación de campos obligatorios
       if (!body.cedula || !body.nombre || !body.apellidos || !body.email || !body.password || !body.id_rol || !body.id_departamento || !body.id_tipo_nombramiento) {
         alert.className = 'alert alert-error show';
         alert.textContent = 'Todos los campos son obligatorios.';
         return;
       }
 
+      // V2: Validar formato de cédula (solo números, 9 a 12 dígitos)
+      const cedulaRegex = /^\d{9,12}$/;
+      if (!cedulaRegex.test(body.cedula)) {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'La cédula debe contener solo números y tener entre 9 y 12 dígitos.';
+        return;
+      }
+
       const btn = document.getElementById('saveUserBtn');
-      btn.disabled = true; btn.textContent = 'Guardando...';
+      btn.disabled = true;
+      btn.textContent = 'Guardando...';
 
       try {
         const res = await fetch('/api/usuarios', {
@@ -474,8 +484,10 @@
       } catch {
         alert.className = 'alert alert-error show';
         alert.textContent = 'Error de conexión.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Crear Usuario';
       }
-      btn.disabled = false; btn.textContent = 'Crear Usuario';
     }
 
     async function loadUsers() {

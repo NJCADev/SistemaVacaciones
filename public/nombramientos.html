@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Nombramientos — Vacaciones CUC</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Gestión de Nombramientos</span>
+      <div class="topbar-actions">
+        <button class="btn btn-primary" onclick="openModal('nombramientoModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:14px;height:14px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nuevo Nombramiento
+        </button>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Filtros -->
+      <div class="flex items-center gap-2 mb-4">
+        <select id="filtroUsuario" class="form-control" style="width:250px">
+          <option value="">Todos los usuarios</option>
+        </select>
+        <span id="countLabel" class="text-sm text-muted"></span>
+      </div>
+
+      <!-- Tabla de nombramientos -->
+      <div class="card">
+        <div id="loadingState" class="loading"><div class="spinner"></div></div>
+        <div class="table-wrap" id="tableWrap" style="display:none">
+          <table>
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Tipo Nombramiento</th>
+                <th>Departamento</th>
+                <th>Fecha Inicio</th>
+                <th>Fecha Fin</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyState" class="empty-state" style="display:none">
+          <p>No hay nombramientos registrados.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modal Nuevo Nombramiento -->
+  <div class="modal-overlay" id="nombramientoModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">Nuevo Nombramiento</span>
+        <button class="modal-close" onclick="closeModal('nombramientoModal')">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:16px;height:16px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="nomAlert" class="alert"></div>
+        <div class="form-group">
+          <label class="form-label" for="selectUsuario">Usuario *</label>
+          <select id="selectUsuario" class="form-control" required>
+            <option value="">Seleccione un usuario</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="selectTipo">Tipo de Nombramiento *</label>
+          <select id="selectTipo" class="form-control" required>
+            <option value="">Seleccione...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="selectDepto">Departamento *</label>
+          <select id="selectDepto" class="form-control" required>
+            <option value="">Seleccione...</option>
+          </select>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label" for="fechaInicio">Fecha Inicio *</label>
+            <input type="date" id="fechaInicio" class="form-control" required/>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="fechaFin">Fecha Fin (opcional)</label>
+            <input type="date" id="fechaFin" class="form-control"/>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('nombramientoModal')">Cancelar</button>
+        <button class="btn btn-primary" id="saveNomBtn" onclick="saveNombramiento()">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Finalizar Nombramiento -->
+  <div class="modal-overlay" id="finalizarModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">Finalizar Nombramiento</span>
+        <button class="modal-close" onclick="closeModal('finalizarModal')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="finAlert" class="alert"></div>
+        <div class="form-group">
+          <label class="form-label" for="fechaFinInput">Fecha de finalización *</label>
+          <input type="date" id="fechaFinInput" class="form-control"/>
+        </div>
+        <input type="hidden" id="nombramientoIdFin"/>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('finalizarModal')">Cancelar</button>
+        <button class="btn btn-primary" onclick="finalizarNombramiento()">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    let allNombramientos = [];
+    let currentNombramientoId = null;
+
+    // Cargar usuarios para filtro y select
+    async function loadUsuariosSelect() {
+      const res = await fetch('/api/usuarios');
+      const users = await res.json();
+      const filtro = document.getElementById('filtroUsuario');
+      filtro.innerHTML = '<option value="">Todos los usuarios</option>';
+      users.forEach(u => {
+        filtro.innerHTML += `<option value="${u.id_usuario}">${u.nombre} ${u.apellidos} (${u.cedula})</option>`;
+      });
+      
+      const selectUsuario = document.getElementById('selectUsuario');
+      selectUsuario.innerHTML = '<option value="">Seleccione un usuario</option>';
+      users.forEach(u => {
+        selectUsuario.innerHTML += `<option value="${u.id_usuario}">${u.nombre} ${u.apellidos} (${u.cedula})</option>`;
+      });
+    }
+
+    async function loadTipos() {
+      const res = await fetch('/api/tipos-nombramiento');
+      const tipos = await res.json();
+      const select = document.getElementById('selectTipo');
+      select.innerHTML = '<option value="">Seleccione...</option>';
+      tipos.forEach(t => {
+        select.innerHTML += `<option value="${t.id_tipo_nombramiento}">${t.nombre}</option>`;
+      });
+    }
+
+    async function loadDepartamentos() {
+      const res = await fetch('/api/departamentos');
+      const depts = await res.json();
+      const select = document.getElementById('selectDepto');
+      select.innerHTML = '<option value="">Seleccione...</option>';
+      depts.forEach(d => {
+        select.innerHTML += `<option value="${d.id_departamento}">${d.nombre}</option>`;
+      });
+    }
+
+    async function loadNombramientos() {
+      const idUsuario = document.getElementById('filtroUsuario').value;
+      const url = idUsuario ? `/api/nombramientos?id_usuario=${idUsuario}` : '/api/nombramientos';
+      const res = await fetch(url);
+      allNombramientos = await res.json();
+      renderTable();
+    }
+
+    function renderTable() {
+      document.getElementById('loadingState').style.display = 'none';
+      if (!allNombramientos.length) {
+        document.getElementById('tableWrap').style.display = 'none';
+        document.getElementById('emptyState').style.display = 'block';
+        return;
+      }
+      document.getElementById('tableWrap').style.display = 'block';
+      document.getElementById('countLabel').textContent = `${allNombramientos.length} nombramientos`;
+      
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = allNombramientos.map(n => `
+        <tr>
+          <td>${n.nombre_completo} (${n.cedula})</td>
+          <td>${n.tipo_nombramiento}</td>
+          <td>${n.departamento}</td>
+          <td>${formatDate(n.fecha_inicio)}</td>
+          <td>${n.fecha_fin ? formatDate(n.fecha_fin) : '—'}</td>
+          <td><span class="badge ${n.activo ? 'badge-approved' : 'badge-rejected'}">${n.activo ? 'Activo' : 'Finalizado'}</span></td>
+          <td>
+            ${n.activo ? `<button class="btn btn-sm btn-secondary" onclick="abrirFinalizar(${n.id_nombramiento})">Finalizar</button>` : ''}
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function saveNombramiento() {
+      const id_usuario = document.getElementById('selectUsuario').value;
+      const id_tipo = document.getElementById('selectTipo').value;
+      const id_depto = document.getElementById('selectDepto').value;
+      const fecha_inicio = document.getElementById('fechaInicio').value;
+      const fecha_fin = document.getElementById('fechaFin').value;
+      const alert = document.getElementById('nomAlert');
+      
+      if (!id_usuario || !id_tipo || !id_depto || !fecha_inicio) {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'Todos los campos marcados con * son obligatorios.';
+        return;
+      }
+      
+      const btn = document.getElementById('saveNomBtn');
+      btn.disabled = true;
+      btn.textContent = 'Guardando...';
+      
+      try {
+        const res = await fetch('/api/nombramientos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id_usuario, id_tipo_nombramiento: id_tipo, id_departamento: id_depto, fecha_inicio, fecha_fin: fecha_fin || null })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          closeModal('nombramientoModal');
+          loadNombramientos();
+        } else {
+          alert.className = 'alert alert-error show';
+          alert.textContent = data.error || 'Error al crear nombramiento.';
+        }
+      } catch {
+        alert.className = 'alert alert-error show';
+        alert.textContent = 'Error de conexión.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Guardar';
+      }
+    }
+
+    function abrirFinalizar(id) {
+      currentNombramientoId = id;
+      document.getElementById('fechaFinInput').value = '';
+      document.getElementById('finAlert').classList.remove('show');
+      openModal('finalizarModal');
+    }
+
+    async function finalizarNombramiento() {
+      const fecha_fin = document.getElementById('fechaFinInput').value;
+      if (!fecha_fin) {
+        document.getElementById('finAlert').className = 'alert alert-error show';
+        document.getElementById('finAlert').textContent = 'Debe seleccionar una fecha.';
+        return;
+      }
+      try {
+        const res = await fetch(`/api/nombramientos/${currentNombramientoId}/finalizar`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fecha_fin })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          closeModal('finalizarModal');
+          loadNombramientos();
+        } else {
+          document.getElementById('finAlert').className = 'alert alert-error show';
+          document.getElementById('finAlert').textContent = data.error || 'Error.';
+        }
+      } catch {
+        document.getElementById('finAlert').className = 'alert alert-error show';
+        document.getElementById('finAlert').textContent = 'Error de conexión.';
+      }
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      if (!['Recursos Humanos', 'Administrador'].includes(user.rol)) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      buildSidebar('nombramientos');
+      await loadUsuariosSelect();
+      await loadTipos();
+      await loadDepartamentos();
+      loadNombramientos();
+      document.getElementById('filtroUsuario').addEventListener('change', loadNombramientos);
+    }
+    init();
+  </script>
+</body>
+</html>
