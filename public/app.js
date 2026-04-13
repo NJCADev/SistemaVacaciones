@@ -114,9 +114,9 @@ function estadoBadge(estado) {
     'aprobada_jefatura': 'badge-info',
     'aprobada_rrhh': 'badge-approved',
     'rechazada': 'badge-rejected',
-    'programada': 'badge-info',
+    'programada': 'badge-warning',
     'retirada': 'badge-gray',
-    'ejecutada': 'badge-approved'
+    'ejecutada': 'badge-success'
   };
   const texto = {
     'pendiente': 'Pendiente',

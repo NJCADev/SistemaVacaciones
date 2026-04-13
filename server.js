@@ -309,12 +309,12 @@ app.post('/api/solicitudes', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'RRHH', 'Administrador'), async (req, res) => {
+app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recursos Humanos', 'Administrador'), async (req, res) => {
   try {
     const { id } = req.params;
     const { accion, observaciones } = req.body;
 
-    // Obtener la solicitud actual
+    // Obtener la solicitud actual junto con el departamento del usuario solicitante
     const [solicitudes] = await pool.execute(
       `SELECT s.*, u.id_departamento AS usuario_depto
        FROM solicitudes_vacaciones s
@@ -339,9 +339,8 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'RRHH
     let nuevoEstado = null;
 
     if (accion === 'aprobar') {
-      // Lógica según rol
       if (usuarioRol === 'Jefatura') {
-        // Jefatura solo puede aprobar solicitudes en estado 'pendiente' de su departamento
+        // Jefatura solo puede aprobar solicitudes pendientes de su departamento
         if (solicitud.estado !== 'pendiente') {
           return res.status(400).json({ error: 'La solicitud no está pendiente.' });
         }
@@ -349,17 +348,18 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'RRHH
           return res.status(403).json({ error: 'No tiene permiso para aprobar solicitudes de otro departamento.' });
         }
         nuevoEstado = 'aprobada_jefatura';
-      } else if (usuarioRol === 'RRHH' || usuarioRol === 'Administrador') {
-        // RRHH puede aprobar solicitudes en 'aprobada_jefatura' (o 'pendiente' si se requiere)
+      } else if (usuarioRol === 'Recursos Humanos' || usuarioRol === 'Administrador') {
+        // RRHH/Admin aprueba solicitudes en estado 'aprobada_jefatura' o 'pendiente'
         if (solicitud.estado !== 'aprobada_jefatura' && solicitud.estado !== 'pendiente') {
           return res.status(400).json({ error: 'La solicitud no está en un estado válido para aprobación por RRHH.' });
         }
-        nuevoEstado = 'aprobada_rrhh';
+        // Cambio HU-03: pasa a 'programada' en lugar de 'aprobada_rrhh'
+        nuevoEstado = 'programada';
       } else {
         return res.status(403).json({ error: 'Rol no autorizado para aprobar.' });
       }
     } else if (accion === 'rechazar') {
-      // Cualquiera de los roles autorizados puede rechazar
+      // Cualquier rol autorizado puede rechazar
       if (usuarioRol === 'Jefatura' && solicitud.usuario_depto !== req.user.id_departamento) {
         return res.status(403).json({ error: 'No tiene permiso para rechazar solicitudes de otro departamento.' });
       }
@@ -610,7 +610,159 @@ app.post('/api/saldo/recalcular-todos', authenticateToken, requireRole('RRHH', '
   }
 });
 
+// Endpoint para ejecutar el descuento diario por asistencia
+app.post('/api/tareas/diarias', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    const fechaHoy = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    // 1. Obtener solicitudes en estado 'programada' que incluyan la fecha actual
+    const [solicitudes] = await pool.execute(
+      `SELECT s.id_solicitud, s.id_usuario, s.dias_solicitados, s.fecha_inicio, s.fecha_fin
+       FROM solicitudes_vacaciones s
+       WHERE s.estado = 'programada'
+         AND ? BETWEEN s.fecha_inicio AND s.fecha_fin`,
+      [fechaHoy]
+    );
+    
+    let descontados = 0;
+    let finalizadas = 0;
+    
+    for (const sol of solicitudes) {
+      // 2. Verificar asistencia del día actual
+      const [asistencia] = await pool.execute(
+        `SELECT estado_asistencia FROM bitacora_asistencia 
+         WHERE id_usuario = ? AND fecha = ?`,
+        [sol.id_usuario, fechaHoy]
+      );
+      
+      // 3. Si estuvo ausente (no justificado), descontar 1 día
+      if (asistencia.length > 0 && asistencia[0].estado_asistencia === 'ausente') {
+        // Verificar que tenga saldo suficiente (al menos 1 día)
+        const [saldo] = await pool.execute(
+          `SELECT saldo_actual FROM saldo_vacaciones 
+           WHERE id_usuario = ? AND periodo_anio = YEAR(?)`,
+          [sol.id_usuario, fechaHoy]
+        );
+        
+        if (saldo.length > 0 && saldo[0].saldo_actual >= 1) {
+          // Descontar 1 día
+          await pool.execute(
+            `UPDATE saldo_vacaciones 
+             SET saldo_actual = saldo_actual - 1 
+             WHERE id_usuario = ? AND periodo_anio = YEAR(?)`,
+            [sol.id_usuario, fechaHoy]
+          );
+          descontados++;
+          
+          // Registrar en auditoría (opcional)
+        }
+      }
+      
+      // 4. Verificar si la solicitud ya terminó (fecha_fin < hoy) y actualizar a 'ejecutada'
+      if (new Date(sol.fecha_fin) < new Date(fechaHoy)) {
+        await pool.execute(
+          `UPDATE solicitudes_vacaciones SET estado = 'ejecutada' WHERE id_solicitud = ?`,
+          [sol.id_solicitud]
+        );
+        finalizadas++;
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Proceso completado. Solicitudes procesadas: ${solicitudes.length}, días descontados: ${descontados}, solicitudes finalizadas: ${finalizadas}`
+    });
+  } catch (error) {
+    console.error('Error en tarea diaria:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/solicitudes/:id/retirar', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Verificar que la solicitud pertenezca al usuario o sea RRHH/Admin
+    const [solicitudes] = await pool.execute(
+      `SELECT * FROM solicitudes_vacaciones WHERE id_solicitud = ?`,
+      [id]
+    );
+    if (solicitudes.length === 0) {
+      return res.status(404).json({ error: 'Solicitud no encontrada' });
+    }
+    const sol = solicitudes[0];
+    
+    // Solo el dueño, RRHH o Admin pueden retirar
+    if (sol.id_usuario !== req.user.id_usuario && !['Recursos Humanos', 'Administrador'].includes(req.user.rol_nombre)) {
+      return res.status(403).json({ error: 'No tiene permiso para retirar esta solicitud' });
+    }
+    
+    // Solo se puede retirar si está pendiente o aprobada_jefatura (antes de programada)
+    if (!['pendiente', 'aprobada_jefatura'].includes(sol.estado)) {
+      return res.status(400).json({ error: 'La solicitud no puede ser retirada en su estado actual' });
+    }
+    
+    await pool.execute(
+      `UPDATE solicitudes_vacaciones SET estado = 'retirada', fecha_resolucion = NOW() WHERE id_solicitud = ?`,
+      [id]
+    );
+    
+    res.json({ success: true, message: 'Solicitud retirada correctamente' });
+  } catch (error) {
+    console.error('Error retirando solicitud:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en http://localhost:${PORT}`);
+});
+
+const cron = require('node-cron');
+
+// Tarea diaria a las 23:00 hora Costa Rica
+cron.schedule('0 23 * * *', async () => {
+  console.log('Ejecutando descuento diario por asistencia...');
+  try {
+    const fechaHoy = new Date().toISOString().split('T')[0];
+    
+    // Lógica similar al endpoint pero sin autenticación
+    const [solicitudes] = await pool.execute(
+      `SELECT s.id_solicitud, s.id_usuario, s.dias_solicitados, s.fecha_inicio, s.fecha_fin
+       FROM solicitudes_vacaciones s
+       WHERE s.estado = 'programada'
+         AND ? BETWEEN s.fecha_inicio AND s.fecha_fin`,
+      [fechaHoy]
+    );
+    
+    for (const sol of solicitudes) {
+      const [asistencia] = await pool.execute(
+        `SELECT estado_asistencia FROM bitacora_asistencia 
+         WHERE id_usuario = ? AND fecha = ?`,
+        [sol.id_usuario, fechaHoy]
+      );
+      
+      if (asistencia.length > 0 && asistencia[0].estado_asistencia === 'ausente') {
+        await pool.execute(
+          `UPDATE saldo_vacaciones 
+           SET saldo_actual = saldo_actual - 1 
+           WHERE id_usuario = ? AND periodo_anio = YEAR(?) AND saldo_actual >= 1`,
+          [sol.id_usuario, fechaHoy]
+        );
+      }
+      
+      if (new Date(sol.fecha_fin) < new Date(fechaHoy)) {
+        await pool.execute(
+          `UPDATE solicitudes_vacaciones SET estado = 'ejecutada' WHERE id_solicitud = ?`,
+          [sol.id_solicitud]
+        );
+      }
+    }
+    console.log(`Descuento diario completado.`);
+  } catch (error) {
+    console.error('Error en cron diario:', error);
+  }
+}, {
+  timezone: "America/Costa_Rica"
 });
