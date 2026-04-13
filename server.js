@@ -111,6 +111,10 @@ app.get('/departamentos', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'departamentos.html'));
 });
 
+app.get('/vacaciones-colectivas', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'vacaciones-colectivas.html'));
+});
+
 // ==================== API AUTH ====================
 
 app.post('/api/login', async (req, res) => {
@@ -802,6 +806,67 @@ app.post('/api/solicitudes/:id/retirar', authenticateToken, async (req, res) => 
   }
 });
 
+// ==================== API FERIADOS ====================
+app.get('/api/vacaciones-colectivas', authenticateToken, async (req, res) => {
+  try {
+    const [feriados] = await pool.execute(
+      `SELECT id_feriado, fecha_feriado, descripcion, activo 
+       FROM vacaciones_colectivas 
+       WHERE activo = TRUE 
+       ORDER BY fecha_feriado`
+    );
+    res.json(feriados);
+  } catch (error) {
+    console.error('Error obteniendo vacaciones colectivas:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/vacaciones-colectivas', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { fecha, descripcion } = req.body;
+  const creadoPor = req.user.id_usuario;
+
+  if (!fecha) {
+    return res.status(400).json({ error: 'La fecha es obligatoria.' });
+  }
+
+  try {
+    // Validar que no exista ya (activo)
+    const [existente] = await pool.execute(
+      'SELECT id_feriado FROM vacaciones_colectivas WHERE fecha_feriado = ? AND activo = TRUE',
+      [fecha]
+    );
+    if (existente.length) {
+      return res.status(400).json({ error: 'Ya existe un feriado activo en esa fecha.' });
+    }
+
+    await pool.execute(
+      `INSERT INTO vacaciones_colectivas (fecha_feriado, descripcion, creado_por, activo) 
+       VALUES (?, ?, ?, TRUE)`,
+      [fecha, descripcion || null, creadoPor]
+    );
+
+    res.json({ success: true, message: 'Feriado registrado correctamente.' });
+  } catch (error) {
+    console.error('Error creando feriado:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.delete('/api/vacaciones-colectivas/:id', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Soft delete: marcar como inactivo
+    await pool.execute(
+      'UPDATE vacaciones_colectivas SET activo = FALSE WHERE id_feriado = ?',
+      [id]
+    );
+    res.json({ success: true, message: 'Feriado eliminado correctamente.' });
+  } catch (error) {
+    console.error('Error eliminando feriado:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 
 // ==================== API UNIDADES A CARGO ====================
 // Obtener unidades a cargo de un usuario

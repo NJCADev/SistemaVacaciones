@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Vacaciones Colectivas — Vacaciones CUC</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Gestión de Vacaciones Colectivas</span>
+    </div>
+
+    <div class="content">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Registrar nuevo feriado</span>
+        </div>
+        <div class="card-body">
+          <div id="alertMsg" class="alert"></div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label" for="fechaFeriado">Fecha *</label>
+              <input type="date" id="fechaFeriado" class="form-control"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="descripcionFeriado">Descripción</label>
+              <input type="text" id="descripcionFeriado" class="form-control" placeholder="Ej. Semana Santa"/>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end">
+            <button class="btn btn-primary" onclick="registrarFeriado()">Agregar Feriado</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:24px">
+        <div class="card-header">
+          <span class="card-title">Feriados registrados</span>
+          <span id="countFeriados" class="text-sm text-muted"></span>
+        </div>
+        <div class="card-body">
+          <div id="loadingLista" class="loading"><div class="spinner"></div></div>
+          <div class="table-wrap" id="tablaFeriadosWrap" style="display:none">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Descripción</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tablaFeriadosBody"></tbody>
+            </table>
+          </div>
+          <div id="emptyFeriados" class="empty-state" style="display:none">
+            <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" style="width:48px;height:48px;margin:0 auto 12px;display:block;opacity:.3"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <p>No hay feriados registrados.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    let feriados = [];
+
+    async function loadFeriados() {
+      document.getElementById('loadingLista').style.display = 'block';
+      document.getElementById('tablaFeriadosWrap').style.display = 'none';
+      document.getElementById('emptyFeriados').style.display = 'none';
+
+      try {
+        const res = await fetch('/api/vacaciones-colectivas');
+        feriados = await res.json();
+      } catch (err) {
+        console.error(err);
+        feriados = [];
+      }
+
+      document.getElementById('loadingLista').style.display = 'none';
+      renderTablaFeriados();
+    }
+
+    function renderTablaFeriados() {
+      const count = feriados.length;
+      document.getElementById('countFeriados').textContent = `${count} feriado${count !== 1 ? 's' : ''}`;
+
+      if (!count) {
+        document.getElementById('emptyFeriados').style.display = 'block';
+        return;
+      }
+
+      document.getElementById('tablaFeriadosWrap').style.display = 'block';
+      document.getElementById('tablaFeriadosBody').innerHTML = feriados.map(f => `
+        <tr>
+          <td><strong>${formatDate(f.fecha_feriado)}</strong></td>
+          <td>${f.descripcion || '—'}</td>
+          <td>
+            <button class="btn btn-sm btn-danger" onclick="eliminarFeriado(${f.id_feriado}, '${f.fecha_feriado}')">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="width:12px;height:12px"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
+              Eliminar
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function registrarFeriado() {
+      const fecha = document.getElementById('fechaFeriado').value;
+      const descripcion = document.getElementById('descripcionFeriado').value.trim();
+      const alert = document.getElementById('alertMsg');
+      alert.classList.remove('show');
+
+      if (!fecha) {
+        alert.textContent = 'Debe seleccionar una fecha.';
+        alert.className = 'alert alert-error show';
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/vacaciones-colectivas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fecha, descripcion })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          document.getElementById('fechaFeriado').value = '';
+          document.getElementById('descripcionFeriado').value = '';
+          alert.textContent = data.message;
+          alert.className = 'alert alert-success show';
+          await loadFeriados();
+        } else {
+          alert.textContent = data.error || 'Error al registrar feriado.';
+          alert.className = 'alert alert-error show';
+        }
+      } catch (err) {
+        alert.textContent = 'Error de conexión.';
+        alert.className = 'alert alert-error show';
+      }
+    }
+
+    async function eliminarFeriado(id, fecha) {
+      if (!confirm(`¿Eliminar el feriado del ${formatDate(fecha)}?`)) return;
+      try {
+        const res = await fetch(`/api/vacaciones-colectivas/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+          await loadFeriados();
+        } else {
+          alert('Error: ' + (data.error || 'No se pudo eliminar'));
+        }
+      } catch (err) {
+        alert('Error de conexión');
+      }
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      if (!['Recursos Humanos', 'Administrador'].includes(user.rol)) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      buildSidebar('vacaciones-colectivas'); // Agregaremos el item al menú luego
+      await loadFeriados();
+    }
+    init();
+  </script>
+</body>
+</html>
