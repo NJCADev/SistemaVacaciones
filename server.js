@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const { sendEmailAsync } = require('./emailService');
 require('dotenv').config();
 
 const app = express();
@@ -325,7 +326,6 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recu
     const { id } = req.params;
     const { accion, observaciones } = req.body;
 
-    // Obtener la solicitud actual junto con el departamento del usuario solicitante
     const [solicitudes] = await pool.execute(
       `SELECT s.*, u.id_departamento AS usuario_depto
        FROM solicitudes_vacaciones s
@@ -342,7 +342,6 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recu
     const usuarioRol = req.user.rol_nombre;
     const usuarioId = req.user.id_usuario;
 
-    // Validar que no se apruebe a sí mismo
     if (accion === 'aprobar' && solicitud.id_usuario === usuarioId) {
       return res.status(403).json({ error: 'No puede aprobar su propia solicitud.' });
     }
@@ -351,7 +350,6 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recu
 
     if (accion === 'aprobar') {
       if (usuarioRol === 'Jefatura') {
-        // Jefatura solo puede aprobar solicitudes pendientes de su departamento
         if (solicitud.estado !== 'pendiente') {
           return res.status(400).json({ error: 'La solicitud no está pendiente.' });
         }
@@ -360,17 +358,14 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recu
         }
         nuevoEstado = 'aprobada_jefatura';
       } else if (usuarioRol === 'Recursos Humanos' || usuarioRol === 'Administrador') {
-        // RRHH/Admin aprueba solicitudes en estado 'aprobada_jefatura' o 'pendiente'
         if (solicitud.estado !== 'aprobada_jefatura' && solicitud.estado !== 'pendiente') {
           return res.status(400).json({ error: 'La solicitud no está en un estado válido para aprobación por RRHH.' });
         }
-        // Cambio HU-03: pasa a 'programada' en lugar de 'aprobada_rrhh'
         nuevoEstado = 'programada';
       } else {
         return res.status(403).json({ error: 'Rol no autorizado para aprobar.' });
       }
     } else if (accion === 'rechazar') {
-      // Cualquier rol autorizado puede rechazar
       if (usuarioRol === 'Jefatura' && solicitud.usuario_depto !== req.user.id_departamento) {
         return res.status(403).json({ error: 'No tiene permiso para rechazar solicitudes de otro departamento.' });
       }
@@ -379,13 +374,35 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recu
       return res.status(400).json({ error: 'Acción no válida.' });
     }
 
-    // Actualizar la solicitud
     await pool.execute(
       `UPDATE solicitudes_vacaciones 
        SET estado = ?, comentario_aprobador = ?, fecha_resolucion = NOW(), id_aprobador = ? 
        WHERE id_solicitud = ?`,
       [nuevoEstado, observaciones || null, usuarioId, id]
     );
+
+    // 📧 Notificar al solicitante
+    const [solData] = await pool.execute(
+      `SELECT u.nombre_completo, u.correo_electronico, s.fecha_inicio, s.fecha_fin, s.dias_solicitados
+       FROM solicitudes_vacaciones s
+       JOIN usuarios u ON s.id_usuario = u.id_usuario
+       WHERE s.id_solicitud = ?`,
+      [id]
+    );
+    if (solData.length) {
+      const d = solData[0];
+      const estadoTexto = nuevoEstado === 'aprobada_jefatura' ? 'aprobada por Jefatura' :
+                          nuevoEstado === 'programada' ? 'aprobada por RRHH' :
+                          nuevoEstado === 'rechazada' ? 'rechazada' : nuevoEstado;
+      const html = `
+        <h2>Actualización de Solicitud de Vacaciones</h2>
+        <p>Hola <strong>${d.nombre_completo}</strong>,</p>
+        <p>Su solicitud del ${d.fecha_inicio} al ${d.fecha_fin} (${d.dias_solicitados} días) ha sido <strong>${estadoTexto}</strong>.</p>
+        ${observaciones ? `<p><strong>Comentario del revisor:</strong> ${observaciones}</p>` : ''}
+        <p>Puede consultar los detalles en el sistema.</p>
+      `;
+      sendEmailAsync(d.correo_electronico, `Solicitud de vacaciones ${estadoTexto}`, html);
+    }
 
     res.json({ success: true, nuevoEstado });
   } catch (error) {
@@ -395,6 +412,73 @@ app.put('/api/solicitudes/:id', authenticateToken, requireRole('Jefatura', 'Recu
 });
 
 // ==================== API USUARIOS ====================
+
+app.post('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    const { cedula, nombre, apellidos, email, password, id_rol, id_departamento, id_tipo_nombramiento } = req.body;
+    
+    // Validaciones básicas
+    if (!cedula || !nombre || !apellidos || !email || !password || !id_rol || !id_departamento || !id_tipo_nombramiento) {
+      return res.status(400).json({ error: 'Todos los campos son obligatorios.' });
+    }
+    
+    const nombre_completo = `${nombre} ${apellidos}`.trim();
+    const password_hash = await bcrypt.hash(password, 10);
+    
+    // Insertar usuario
+    const [result] = await pool.execute(
+      `INSERT INTO usuarios (cedula_unica, nombre_completo, correo_electronico, fecha_ingreso,
+        id_rol_actual, id_departamento, id_tipo_nombramiento, password_hash, estado_usuario)
+       VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, 'activo')`,
+      [cedula, nombre_completo, email, id_rol, id_departamento, id_tipo_nombramiento, password_hash]
+    );
+
+    const idUsuario = result.insertId;
+    const anioActual = new Date().getFullYear();
+    
+    // Calcular saldo inicial
+    await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [idUsuario, anioActual]);
+
+    // --- ENVÍO DE CORREO DE BIENVENIDA (ROBUSTO) ---
+    try {
+      // Obtener el correo y nombre desde la BD (por si acaso)
+      const [newUser] = await pool.execute(
+        'SELECT correo_electronico, nombre_completo FROM usuarios WHERE id_usuario = ?',
+        [idUsuario]
+      );
+      
+      if (newUser.length > 0) {
+        const userEmail = newUser[0].correo_electronico;
+        const userName = newUser[0].nombre_completo;
+        
+        console.log(`Intentando enviar correo de bienvenida a ${userEmail}...`);
+        
+        const html = `
+          <h2>Bienvenido al Sistema de Vacaciones CUC</h2>
+          <p>Hola <strong>${userName}</strong>,</p>
+          <p>Se ha creado una cuenta para usted en el sistema de gestión de vacaciones.</p>
+          <p><strong>Usuario (cédula):</strong> ${cedula}<br>
+          <strong>Contraseña temporal:</strong> ${password}</p>
+          <p>Puede acceder en: <a href="http://localhost:3000">http://localhost:3000</a></p>
+          <p>Le recomendamos cambiar su contraseña al iniciar sesión por primera vez.</p>
+          <p>Saludos,<br>Recursos Humanos</p>
+        `;
+        
+        sendEmailAsync(userEmail, 'Bienvenido al Sistema de Vacaciones CUC', html);
+      } else {
+        console.error('⚠️ No se pudo obtener el correo del nuevo usuario para enviar bienvenida.');
+      }
+    } catch (mailError) {
+      console.error('⚠️ Error al intentar enviar correo de bienvenida:', mailError.message);
+      // No bloqueamos la respuesta al cliente
+    }
+
+    res.json({ success: true, id: idUsuario });
+  } catch (error) {
+    console.error('Error creando usuario:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 
 app.get('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
   try {
@@ -420,40 +504,13 @@ app.get('/api/usuarios', authenticateToken, requireRole('Recursos Humanos', 'Adm
         rol: u.rol,
         departamento: u.departamento,
         tipo_nombramiento: u.tipo_nombramiento,
-        activo: u.estado_usuario === 'activo'   // booleano
+        activo: u.estado_usuario === 'activo'
       };
     });
     
     res.json(usuariosFormateados);
   } catch (error) {
     console.error('Error obteniendo usuarios:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-app.post('/api/usuarios', authenticateToken, requireRole('RRHH', 'Administrador'), async (req, res) => {
-  try {
-    const { cedula, nombre, apellidos, email, password, id_rol, id_departamento, id_tipo_nombramiento } = req.body;
-    
-    const nombre_completo = `${nombre} ${apellidos}`.trim();
-    const password_hash = await bcrypt.hash(password, 10);
-    
-    const [result] = await pool.execute(
-      `INSERT INTO usuarios (cedula_unica, nombre_completo, correo_electronico, fecha_ingreso,
-        id_rol_actual, id_departamento, id_tipo_nombramiento, password_hash, estado_usuario)
-       VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, 'activo')`,
-      [cedula, nombre_completo, email, id_rol, id_departamento, id_tipo_nombramiento, password_hash]
-    );
-
-    const idUsuario = result.insertId;
-    const anioActual = new Date().getFullYear();
-    
-    // Llamar al SP para calcular el saldo inicial según reglas
-    await pool.execute(`CALL calcular_y_actualizar_saldo_inicial(?, ?)`, [idUsuario, anioActual]);
-
-    res.json({ success: true, id: idUsuario });
-  } catch (error) {
-    console.error('Error creando usuario:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -537,6 +594,19 @@ app.put('/api/usuarios/:id/rol', authenticateToken, requireRole('Recursos Humano
        JSON.stringify({ id_rol_actual: usuario.id_rol_actual }), 
        JSON.stringify({ id_rol_actual: nuevo_rol_id })]
     );
+
+    // 9. 📧 Notificar al usuario por correo
+    const [userEmail] = await pool.execute('SELECT correo_electronico, nombre_completo FROM usuarios WHERE id_usuario = ?', [id]);
+    if (userEmail.length) {
+      const htmlRol = `
+        <h2>Cambio de Rol en el Sistema de Vacaciones</h2>
+        <p>Hola <strong>${userEmail[0].nombre_completo}</strong>,</p>
+        <p>Su rol en el sistema ha sido actualizado a <strong>${nuevoRolNombre}</strong>.</p>
+        <p>Fecha de vigencia: ${vigencia_desde || 'inmediata'}</p>
+        <p>Si tiene dudas, contacte a Recursos Humanos.</p>
+      `;
+      sendEmailAsync(userEmail[0].correo_electronico, 'Actualización de rol en Sistema de Vacaciones', htmlRol);
+    }
 
     console.log(`[ROL] Cambio exitoso para usuario ${id}`);
     res.json({ success: true, message: 'Rol actualizado correctamente' });
@@ -725,6 +795,7 @@ app.get('/api/auditoria/tablas', authenticateToken, requireRole('Recursos Humano
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
+
 // ==================== API TIPOS NOMBRAMIENTO ====================
 
 app.get('/api/tipos-nombramiento', authenticateToken, async (req, res) => {
@@ -909,38 +980,79 @@ app.post('/api/tareas/diarias', authenticateToken, requireRole('Recursos Humanos
   }
 });
 
-app.post('/api/solicitudes/:id/retirar', authenticateToken, async (req, res) => {
+app.post('/api/solicitudes', authenticateToken, async (req, res) => {
   try {
-    const { id } = req.params;
+    const { fecha_inicio, fecha_fin, observaciones } = req.body;
     
-    // Verificar que la solicitud pertenezca al usuario o sea RRHH/Admin
-    const [solicitudes] = await pool.execute(
-      `SELECT * FROM solicitudes_vacaciones WHERE id_solicitud = ?`,
-      [id]
+    // Calcular días hábiles (simplificado)
+    const inicio = new Date(fecha_inicio);
+    const fin = new Date(fecha_fin);
+    let dias = 0;
+    const current = new Date(inicio);
+    while (current <= fin) {
+      const dayOfWeek = current.getDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) dias++;
+      current.setDate(current.getDate() + 1);
+    }
+
+    // Verificar saldo disponible
+    const [saldos] = await pool.execute(
+      `SELECT saldo_actual FROM saldo_vacaciones 
+       WHERE id_usuario = ? AND periodo_anio = YEAR(CURDATE())`,
+      [req.user.id_usuario]
     );
-    if (solicitudes.length === 0) {
-      return res.status(404).json({ error: 'Solicitud no encontrada' });
+    const saldoDisponible = saldos.length > 0 ? saldos[0].saldo_actual : 0;
+    if (saldoDisponible < dias) {
+      return res.status(400).json({ error: 'No tiene suficientes días disponibles' });
     }
-    const sol = solicitudes[0];
-    
-    // Solo el dueño, RRHH o Admin pueden retirar
-    if (sol.id_usuario !== req.user.id_usuario && !['Recursos Humanos', 'Administrador'].includes(req.user.rol_nombre)) {
-      return res.status(403).json({ error: 'No tiene permiso para retirar esta solicitud' });
-    }
-    
-    // Solo se puede retirar si está pendiente o aprobada_jefatura (antes de programada)
-    if (!['pendiente', 'aprobada_jefatura'].includes(sol.estado)) {
-      return res.status(400).json({ error: 'La solicitud no puede ser retirada en su estado actual' });
-    }
-    
-    await pool.execute(
-      `UPDATE solicitudes_vacaciones SET estado = 'retirada', fecha_resolucion = NOW() WHERE id_solicitud = ?`,
-      [id]
+
+    // Insertar solicitud
+    const [result] = await pool.execute(
+      `INSERT INTO solicitudes_vacaciones 
+        (id_usuario, fecha_inicio, fecha_fin, dias_solicitados, observaciones, estado)
+       VALUES (?, ?, ?, ?, ?, 'pendiente')`,
+      [req.user.id_usuario, fecha_inicio, fecha_fin, dias, observaciones || null]
     );
-    
-    res.json({ success: true, message: 'Solicitud retirada correctamente' });
+
+    const idSolicitud = result.insertId;
+
+    // 📧 Obtener datos del solicitante y su jefe
+    const [userData] = await pool.execute(
+      `SELECT u.nombre_completo, u.correo_electronico, 
+              j.correo_electronico AS jefe_email, j.nombre_completo AS jefe_nombre
+       FROM usuarios u
+       LEFT JOIN usuarios j ON u.id_jefatura_inmediata = j.id_usuario
+       WHERE u.id_usuario = ?`,
+      [req.user.id_usuario]
+    );
+    const u = userData[0];
+
+    // Correo de confirmación al funcionario
+    const htmlUser = `
+      <h2>Solicitud de Vacaciones Registrada</h2>
+      <p>Hola <strong>${u.nombre_completo}</strong>,</p>
+      <p>Su solicitud de vacaciones ha sido registrada exitosamente.</p>
+      <p><strong>Fechas:</strong> ${fecha_inicio} al ${fecha_fin} (${dias} días hábiles)<br>
+      <strong>Estado:</strong> Pendiente de aprobación</p>
+      <p>Recibirá una notificación cuando sea revisada.</p>
+    `;
+    sendEmailAsync(u.correo_electronico, 'Solicitud de vacaciones registrada', htmlUser);
+
+    // Aviso al jefe inmediato (si existe)
+    if (u.jefe_email) {
+      const htmlJefe = `
+        <h2>Nueva Solicitud de Vacaciones Pendiente</h2>
+        <p>Hola <strong>${u.jefe_nombre}</strong>,</p>
+        <p>El funcionario <strong>${u.nombre_completo}</strong> ha enviado una solicitud de vacaciones que requiere su aprobación.</p>
+        <p><strong>Fechas:</strong> ${fecha_inicio} al ${fecha_fin} (${dias} días hábiles)</p>
+        <p>Por favor, ingrese al sistema para revisarla.</p>
+      `;
+      sendEmailAsync(u.jefe_email, 'Nueva solicitud de vacaciones pendiente', htmlJefe);
+    }
+
+    res.json({ success: true, id: idSolicitud, dias });
   } catch (error) {
-    console.error('Error retirando solicitud:', error);
+    console.error('Error creando solicitud:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -984,6 +1096,19 @@ app.post('/api/vacaciones-colectivas', authenticateToken, requireRole('Recursos 
        VALUES (?, ?, ?, TRUE)`,
       [fecha, descripcion || null, creadoPor]
     );
+
+    // 📧 Notificar a todos los usuarios activos
+    const [emails] = await pool.execute(`SELECT correo_electronico FROM usuarios WHERE estado_usuario = 'activo'`);
+    const destinatarios = emails.map(e => e.correo_electronico).join(',');
+    if (destinatarios) {
+      const htmlFeriado = `
+        <h2>Nuevo Feriado Colectivo</h2>
+        <p>Se ha registrado un nuevo día de vacación colectiva:</p>
+        <p><strong>Fecha:</strong> ${fecha}<br><strong>Descripción:</strong> ${descripcion || '—'}</p>
+        <p>Este día será excluido del cálculo de días hábiles en las solicitudes.</p>
+      `;
+      sendEmailAsync(destinatarios, 'Nuevo feriado colectivo registrado', htmlFeriado);
+    }
 
     res.json({ success: true, message: 'Feriado registrado correctamente.' });
   } catch (error) {
