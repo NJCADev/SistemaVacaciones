@@ -118,6 +118,10 @@ app.get('/vacaciones-colectivas', (req, res) => {
 app.get('/perfil', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'perfil.html'));
 });
+
+app.get('/auditoria', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'auditoria.html'));
+});
 // ==================== API AUTH ====================
 
 app.post('/api/login', async (req, res) => {
@@ -647,6 +651,80 @@ app.get('/api/roles', authenticateToken, async (req, res) => {
   }
 });
 
+app.get('/api/auditoria', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const pagina = parseInt(req.query.pagina) || 1;
+  const limite = parseInt(req.query.limite) || 50;
+  const offset = (pagina - 1) * limite;
+  const { usuario, tabla, fechaInicio, fechaFin } = req.query;
+
+  try {
+    let whereSQL = '';
+    let countWhereSQL = '';
+
+    if (usuario || tabla || fechaInicio || fechaFin) {
+      const conditions = [];
+      if (usuario) {
+        // Escapar comillas simples para prevenir inyección
+        const userSafe = usuario.replace(/'/g, "''");
+        conditions.push(`(u.cedula_unica LIKE '%${userSafe}%' OR u.nombre_completo LIKE '%${userSafe}%')`);
+      }
+      if (tabla) {
+        const tablaSafe = tabla.replace(/'/g, "''");
+        conditions.push(`a.tabla_afectada = '${tablaSafe}'`);
+      }
+      if (fechaInicio) {
+        conditions.push(`DATE(a.fecha_hora) >= '${fechaInicio}'`);
+      }
+      if (fechaFin) {
+        conditions.push(`DATE(a.fecha_hora) <= '${fechaFin}'`);
+      }
+      whereSQL = 'WHERE ' + conditions.join(' AND ');
+      countWhereSQL = whereSQL; // mismo WHERE para el conteo
+    }
+
+    // Consulta de datos
+    const [rows] = await pool.query(
+      `SELECT a.id_auditoria, a.fecha_hora, a.tabla_afectada, a.operacion, 
+              a.valor_anterior, a.valor_nuevo, a.ip_origen,
+              u.cedula_unica, u.nombre_completo
+       FROM bitacora_auditoria a
+       LEFT JOIN usuarios u ON a.id_usuario = u.id_usuario
+       ${whereSQL}
+       ORDER BY a.fecha_hora DESC
+       LIMIT ${limite} OFFSET ${offset}`
+    );
+
+    // Conteo total
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) AS total FROM bitacora_auditoria a
+       LEFT JOIN usuarios u ON a.id_usuario = u.id_usuario
+       ${countWhereSQL}`
+    );
+    const total = countResult[0].total;
+
+    res.json({
+      data: rows,
+      total,
+      pagina,
+      totalPaginas: Math.ceil(total / limite)
+    });
+  } catch (error) {
+    console.error('Error obteniendo auditoría:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Opcional: obtener tablas disponibles para filtro
+app.get('/api/auditoria/tablas', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT DISTINCT tabla_afectada FROM bitacora_auditoria ORDER BY tabla_afectada'
+    );
+    res.json(rows.map(r => r.tabla_afectada));
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 // ==================== API TIPOS NOMBRAMIENTO ====================
 
 app.get('/api/tipos-nombramiento', authenticateToken, async (req, res) => {

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Auditoría — Vacaciones CUC</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Bitácora de Auditoría</span>
+    </div>
+
+    <div class="content">
+      <!-- Filtros -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-body">
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+            <div style="min-width:180px">
+              <label class="form-label">Usuario</label>
+              <input type="text" id="filtroUsuario" class="form-control" placeholder="Cédula o nombre"/>
+            </div>
+            <div style="min-width:150px">
+              <label class="form-label">Tabla afectada</label>
+              <select id="filtroTabla" class="form-control">
+                <option value="">Todas</option>
+              </select>
+            </div>
+            <div style="min-width:130px">
+              <label class="form-label">Fecha desde</label>
+              <input type="date" id="filtroFechaInicio" class="form-control"/>
+            </div>
+            <div style="min-width:130px">
+              <label class="form-label">Fecha hasta</label>
+              <input type="date" id="filtroFechaFin" class="form-control"/>
+            </div>
+            <div>
+              <button class="btn btn-primary" onclick="aplicarFiltros()">Buscar</button>
+              <button class="btn btn-secondary" onclick="limpiarFiltros()">Limpiar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Registros de actividad</span>
+          <span id="totalRegistros" class="text-sm text-muted"></span>
+        </div>
+        <div class="card-body">
+          <div id="loadingAuditoria" class="loading"><div class="spinner"></div></div>
+          <div class="table-wrap" id="tablaAuditoriaWrap" style="display:none">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha / Hora</th>
+                  <th>Usuario</th>
+                  <th>Tabla</th>
+                  <th>Operación</th>
+                  <th>Valor Anterior</th>
+                  <th>Valor Nuevo</th>
+                </tr>
+              </thead>
+              <tbody id="tablaAuditoriaBody"></tbody>
+            </table>
+          </div>
+          <div id="emptyAuditoria" class="empty-state" style="display:none">
+            <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>
+            <p>No hay registros de auditoría.</p>
+          </div>
+          <!-- Paginación -->
+          <div id="paginacion" style="margin-top:16px;display:flex;justify-content:center;gap:8px"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    let paginaActual = 1;
+    const limite = 20;
+    let totalPaginas = 1;
+
+    async function loadTablas() {
+      try {
+        const res = await fetch('/api/auditoria/tablas');
+        const tablas = await res.json();
+        const select = document.getElementById('filtroTabla');
+        select.innerHTML = '<option value="">Todas</option>' +
+          tablas.map(t => `<option value="${t}">${t}</option>`).join('');
+      } catch (err) {
+        console.error('Error cargando tablas:', err);
+      }
+    }
+
+    async function cargarAuditoria(pagina = 1) {
+      paginaActual = pagina;
+      document.getElementById('loadingAuditoria').style.display = 'block';
+      document.getElementById('tablaAuditoriaWrap').style.display = 'none';
+      document.getElementById('emptyAuditoria').style.display = 'none';
+
+      const params = new URLSearchParams({
+        pagina,
+        limite,
+        usuario: document.getElementById('filtroUsuario').value,
+        tabla: document.getElementById('filtroTabla').value,
+        fechaInicio: document.getElementById('filtroFechaInicio').value,
+        fechaFin: document.getElementById('filtroFechaFin').value
+      });
+
+      try {
+        const res = await fetch(`/api/auditoria?${params}`);
+        const data = await res.json();
+        totalPaginas = data.totalPaginas;
+        document.getElementById('totalRegistros').textContent = `${data.total} registros`;
+
+        if (!data.data.length) {
+          document.getElementById('emptyAuditoria').style.display = 'block';
+        } else {
+          document.getElementById('tablaAuditoriaWrap').style.display = 'block';
+          renderTabla(data.data);
+          renderPaginacion();
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        document.getElementById('loadingAuditoria').style.display = 'none';
+      }
+    }
+
+    function renderTabla(registros) {
+      const tbody = document.getElementById('tablaAuditoriaBody');
+      tbody.innerHTML = registros.map(r => {
+        const fecha = new Date(r.fecha_hora).toLocaleString('es-CR');
+        const usuario = r.nombre_completo ? `${r.nombre_completo} (${r.cedula_unica})` : 'Sistema';
+        return `
+          <tr>
+            <td class="font-mono text-sm">${fecha}</td>
+            <td>${usuario}</td>
+            <td>${r.tabla_afectada}</td>
+            <td><span class="badge ${getOperacionBadge(r.operacion)}">${r.operacion}</span></td>
+            <td class="text-sm text-muted"><pre style="margin:0;font-size:11px;max-width:200px;overflow:auto">${formatJSON(r.valor_anterior)}</pre></td>
+            <td class="text-sm text-muted"><pre style="margin:0;font-size:11px;max-width:200px;overflow:auto">${formatJSON(r.valor_nuevo)}</pre></td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function formatJSON(value) {
+      if (value === null || value === undefined) return '—';
+      
+      // Si ya es un objeto (el driver lo parseó), convertirlo a string JSON bonito
+      if (typeof value === 'object') {
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch {
+          return String(value);
+        }
+      }
+      
+      // Si es un string, intentar parsearlo primero (puede que venga como string JSON)
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          return JSON.stringify(parsed, null, 2);
+        } catch {
+          // No es JSON válido, devolver tal cual
+          return value;
+        }
+      }
+      
+      // Para otros tipos (número, booleano)
+      return String(value);
+    }
+
+    function getOperacionBadge(op) {
+      const map = {
+        'INSERT': 'badge-approved',
+        'UPDATE': 'badge-info',
+        'DELETE': 'badge-rejected',
+        'UPDATE_CONTACTO': 'badge-warning'
+      };
+      return map[op] || 'badge-gray';
+    }
+
+    function renderPaginacion() {
+      const cont = document.getElementById('paginacion');
+      if (totalPaginas <= 1) {
+        cont.innerHTML = '';
+        return;
+      }
+      let html = '';
+      for (let i = 1; i <= totalPaginas; i++) {
+        html += `<button class="btn btn-sm ${i === paginaActual ? 'btn-primary' : 'btn-secondary'}" onclick="cargarAuditoria(${i})">${i}</button>`;
+      }
+      cont.innerHTML = html;
+    }
+
+    function aplicarFiltros() {
+      cargarAuditoria(1);
+    }
+
+    function limpiarFiltros() {
+      document.getElementById('filtroUsuario').value = '';
+      document.getElementById('filtroTabla').value = '';
+      document.getElementById('filtroFechaInicio').value = '';
+      document.getElementById('filtroFechaFin').value = '';
+      cargarAuditoria(1);
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      if (!['Recursos Humanos', 'Administrador'].includes(user.rol)) {
+        window.location.href = '/dashboard';
+        return;
+      }
+      buildSidebar('auditoria');
+      await loadTablas();
+      cargarAuditoria();
+    }
+    init();
+  </script>
+</body>
+</html>
