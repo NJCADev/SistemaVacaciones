@@ -447,6 +447,94 @@ app.post('/api/usuarios', authenticateToken, requireRole('RRHH', 'Administrador'
   }
 });
 
+// Cambiar rol de un usuario
+app.put('/api/usuarios/:id/rol', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id } = req.params;
+  const { nuevo_rol_id, password_confirmacion, vigencia_desde, vigencia_hasta } = req.body;
+  const adminId = req.user.id_usuario;
+
+  console.log(`[ROL] Solicitud recibida: usuario ${id}, admin ${adminId}, nuevo rol ${nuevo_rol_id}`);
+
+  try {
+    // 1. Validar que el administrador no se cambie a sí mismo
+    if (parseInt(id) === adminId) {
+      console.log('[ROL] Intento de auto-modificación');
+      return res.status(403).json({ error: 'No puede cambiar su propio rol.' });
+    }
+
+    // 2. Verificar contraseña del administrador
+    const [adminRows] = await pool.execute('SELECT password_hash FROM usuarios WHERE id_usuario = ?', [adminId]);
+    if (!adminRows.length) {
+      console.log('[ROL] Admin no encontrado');
+      return res.status(404).json({ error: 'Administrador no encontrado' });
+    }
+    const passwordValida = await bcrypt.compare(password_confirmacion, adminRows[0].password_hash);
+    if (!passwordValida) {
+      console.log('[ROL] Contraseña incorrecta');
+      return res.status(401).json({ error: 'Contraseña de confirmación incorrecta.' });
+    }
+
+    // 3. Obtener usuario a modificar
+    const [userRows] = await pool.execute(
+      `SELECT u.id_rol_actual, r.nombre_rol 
+       FROM usuarios u 
+       JOIN roles r ON u.id_rol_actual = r.id_rol 
+       WHERE u.id_usuario = ?`, 
+      [id]
+    );
+    if (!userRows.length) {
+      console.log('[ROL] Usuario destino no encontrado');
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    const usuario = userRows[0];
+
+    // 4. Validar que el nuevo rol sea diferente
+    if (usuario.id_rol_actual === nuevo_rol_id) {
+      console.log('[ROL] El usuario ya tiene ese rol');
+      return res.status(400).json({ error: 'El usuario ya posee ese rol.' });
+    }
+
+    // 5. Si el nuevo rol es Jefatura, verificar que tenga al menos una unidad a cargo
+    const [rolRows] = await pool.execute('SELECT nombre_rol FROM roles WHERE id_rol = ?', [nuevo_rol_id]);
+    const nuevoRolNombre = rolRows[0]?.nombre_rol;
+    if (nuevoRolNombre === 'Jefatura') {
+      const [unidades] = await pool.execute('SELECT 1 FROM unidades_a_cargo WHERE id_jefatura = ?', [id]);
+      if (!unidades.length) {
+        console.log('[ROL] Usuario no tiene unidades a cargo para ser Jefatura');
+        return res.status(400).json({ 
+          error: 'El usuario no tiene unidades a cargo. Asigne al menos una unidad antes de asignar rol Jefatura.' 
+        });
+      }
+    }
+
+    // 6. Registrar cambio en historial
+    await pool.execute(
+      `INSERT INTO usuario_historial_rol 
+        (id_usuario, id_rol_anterior, id_rol_nuevo, id_autorizador, vigencia_desde, vigencia_hasta) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, usuario.id_rol_actual, nuevo_rol_id, adminId, vigencia_desde || new Date(), vigencia_hasta || null]
+    );
+
+    // 7. Actualizar rol del usuario
+    await pool.execute('UPDATE usuarios SET id_rol_actual = ? WHERE id_usuario = ?', [nuevo_rol_id, id]);
+
+    // 8. Registrar en bitácora de auditoría
+    await pool.execute(
+      `INSERT INTO bitacora_auditoria (id_usuario, tabla_afectada, operacion, valor_anterior, valor_nuevo)
+       VALUES (?, 'usuarios', 'UPDATE', ?, ?)`,
+      [adminId, 
+       JSON.stringify({ id_rol_actual: usuario.id_rol_actual }), 
+       JSON.stringify({ id_rol_actual: nuevo_rol_id })]
+    );
+
+    console.log(`[ROL] Cambio exitoso para usuario ${id}`);
+    res.json({ success: true, message: 'Rol actualizado correctamente' });
+  } catch (error) {
+    console.error('[ROL] Error en endpoint:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ==================== API DEPARTAMENTOS ====================
 
 app.get('/api/departamentos', authenticateToken, async (req, res) => {
@@ -711,6 +799,56 @@ app.post('/api/solicitudes/:id/retirar', authenticateToken, async (req, res) => 
   } catch (error) {
     console.error('Error retirando solicitud:', error);
     res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+
+// ==================== API UNIDADES A CARGO ====================
+// Obtener unidades a cargo de un usuario
+app.get('/api/usuarios/:id/unidades', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    const [unidades] = await pool.execute(
+      `SELECT d.id_departamento, d.nombre_unidad, d.codigo_unico_4_digitos
+       FROM unidades_a_cargo ua
+       JOIN departamentos d ON ua.id_departamento = d.id_departamento
+       WHERE ua.id_jefatura = ?`,
+      [req.params.id]
+    );
+    res.json(unidades);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Error al obtener unidades' });
+  }
+});
+
+// Asignar unidad a cargo
+app.post('/api/usuarios/:id/unidades', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  const { id_departamento } = req.body;
+  const id_jefatura = req.params.id;
+  try {
+    await pool.execute(
+      'INSERT INTO unidades_a_cargo (id_jefatura, id_departamento) VALUES (?, ?)',
+      [id_jefatura, id_departamento]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ error: 'Esta unidad ya está asignada a esta jefatura.' });
+    }
+    res.status(500).json({ error: 'Error al asignar unidad' });
+  }
+});
+
+// Eliminar unidad a cargo
+app.delete('/api/usuarios/:id/unidades/:id_departamento', authenticateToken, requireRole('Recursos Humanos', 'Administrador'), async (req, res) => {
+  try {
+    await pool.execute(
+      'DELETE FROM unidades_a_cargo WHERE id_jefatura = ? AND id_departamento = ?',
+      [req.params.id, req.params.id_departamento]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al eliminar unidad' });
   }
 });
 

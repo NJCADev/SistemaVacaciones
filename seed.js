@@ -1,4 +1,4 @@
-const mysql = require('mysql2/promise');
+    const mysql = require('mysql2/promise');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
@@ -25,7 +25,7 @@ async function crearUsuarios() {
     if (!tipo.length) throw new Error('Tipo nombramiento "propiedad" no encontrado.');
     const idTipo = tipo[0].id_tipo;
 
-    // 2. Datos de usuarios a crear
+    // 2. Datos de usuarios a crear (se agregó el Funcionario)
     const usuarios = [
       {
         cedula: '111111111',
@@ -47,6 +47,13 @@ async function crearUsuarios() {
         correo: 'admin@cuc.ac.cr',
         rol: 'Administrador',
         password: 'Admin123',
+      },
+      {
+        cedula: '123456789',
+        nombre_completo: 'Funcionario Prueba',
+        correo: 'funcionario@cuc.ac.cr',
+        rol: 'Funcionario',
+        password: 'Funcionario123',
       },
     ];
 
