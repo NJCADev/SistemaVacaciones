@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mi Perfil — Vacaciones CUC</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div id="sidebar" class="sidebar"></div>
+
+  <main class="main">
+    <div class="topbar">
+      <span class="topbar-title">Mi Perfil</span>
+    </div>
+
+    <div class="content">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Información Personal</span>
+        </div>
+        <div class="card-body">
+          <div id="alertContacto" class="alert"></div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Nombre completo</label>
+              <input type="text" id="nombreCompleto" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Cédula</label>
+              <input type="text" id="cedula" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Correo electrónico</label>
+              <input type="email" id="email" class="form-control" placeholder="correo@ejemplo.com"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Teléfono</label>
+              <input type="tel" id="telefono" class="form-control" placeholder="+506 8888-8888"/>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end">
+            <button class="btn btn-primary" onclick="guardarContacto()">Guardar cambios</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:24px">
+        <div class="card-header">
+          <span class="card-title">Información Laboral</span>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Departamento</label>
+              <input type="text" id="departamento" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Categoría Vacacional</label>
+              <input type="text" id="categoriaVacacional" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tipo de Nombramiento</label>
+              <input type="text" id="tipoNombramiento" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Fecha de Ingreso</label>
+              <input type="text" id="fechaIngreso" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Rol actual</label>
+              <input type="text" id="rol" class="form-control" readonly disabled/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Estado</label>
+              <input type="text" id="estado" class="form-control" readonly disabled/>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:24px">
+        <div class="card-header">
+          <span class="card-title">Saldo de Vacaciones</span>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;align-items:baseline;gap:24px">
+            <div>
+              <div class="stat-label">Días disponibles</div>
+              <div style="font-size:32px;font-weight:700;color:var(--accent)" id="saldoActual">—</div>
+            </div>
+            <div class="text-sm text-muted">Año en curso</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+  <script>
+    let perfilData = null;
+
+    async function loadPerfil() {
+      try {
+        const res = await fetch('/api/perfil');
+        if (!res.ok) throw new Error('No se pudo cargar el perfil');
+        perfilData = await res.json();
+        mostrarDatos();
+      } catch (error) {
+        console.error(error);
+        alert('Error al cargar los datos del perfil.');
+      }
+    }
+
+    function mostrarDatos() {
+      document.getElementById('nombreCompleto').value = perfilData.nombre_completo || '';
+      document.getElementById('cedula').value = perfilData.cedula || '';
+      document.getElementById('email').value = perfilData.email || '';
+      document.getElementById('telefono').value = perfilData.telefono || '';
+      document.getElementById('departamento').value = perfilData.departamento || '';
+      document.getElementById('categoriaVacacional').value = perfilData.categoria_vacacional || '';
+      document.getElementById('tipoNombramiento').value = perfilData.tipo_nombramiento || '';
+      document.getElementById('fechaIngreso').value = perfilData.fecha_ingreso ? formatDate(perfilData.fecha_ingreso) : '';
+      document.getElementById('rol').value = perfilData.rol || '';
+      document.getElementById('estado').value = perfilData.estado_usuario || '';
+      document.getElementById('saldoActual').textContent = perfilData.saldo_actual ?? '0';
+    }
+
+    async function guardarContacto() {
+      const email = document.getElementById('email').value.trim();
+      const telefono = document.getElementById('telefono').value.trim();
+      const alert = document.getElementById('alertContacto');
+      alert.classList.remove('show');
+
+      try {
+        const res = await fetch('/api/perfil/contacto', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, telefono })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert.textContent = data.message;
+          alert.className = 'alert alert-success show';
+          // Actualizar datos en memoria
+          perfilData.email = email;
+          perfilData.telefono = telefono;
+        } else {
+          alert.textContent = data.error || 'Error al actualizar';
+          alert.className = 'alert alert-error show';
+        }
+      } catch (error) {
+        alert.textContent = 'Error de conexión';
+        alert.className = 'alert alert-error show';
+      }
+    }
+
+    async function init() {
+      const user = await loadSession();
+      if (!user) return;
+      buildSidebar('perfil');
+      await loadPerfil();
+    }
+    init();
+  </script>
+</body>
+</html>

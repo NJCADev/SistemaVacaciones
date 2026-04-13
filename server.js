@@ -115,6 +115,9 @@ app.get('/vacaciones-colectivas', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'vacaciones-colectivas.html'));
 });
 
+app.get('/perfil', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'perfil.html'));
+});
 // ==================== API AUTH ====================
 
 app.post('/api/login', async (req, res) => {
@@ -535,6 +538,64 @@ app.put('/api/usuarios/:id/rol', authenticateToken, requireRole('Recursos Humano
     res.json({ success: true, message: 'Rol actualizado correctamente' });
   } catch (error) {
     console.error('[ROL] Error en endpoint:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/perfil', authenticateToken, async (req, res) => {
+  const userId = req.user.id_usuario;
+  try {
+    const [rows] = await pool.execute(
+      `SELECT u.cedula_unica AS cedula, u.nombre_completo, u.correo_electronico AS email, u.telefono,
+              u.fecha_ingreso, u.estado_usuario,
+              r.nombre_rol AS rol,
+              d.nombre_unidad AS departamento, d.categoria_vacacional,
+              tn.nombre_tipo AS tipo_nombramiento,
+              (SELECT saldo_actual FROM saldo_vacaciones 
+               WHERE id_usuario = u.id_usuario AND periodo_anio = YEAR(CURDATE())) AS saldo_actual
+       FROM usuarios u
+       JOIN roles r ON u.id_rol_actual = r.id_rol
+       JOIN departamentos d ON u.id_departamento = d.id_departamento
+       JOIN tipo_nombramiento tn ON u.id_tipo_nombramiento = tn.id_tipo
+       WHERE u.id_usuario = ?`,
+      [userId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json(rows[0]);
+  } catch (error) {
+    console.error('Error obteniendo perfil:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.put('/api/perfil/contacto', authenticateToken, async (req, res) => {
+  const userId = req.user.id_usuario;
+  const { email, telefono } = req.body;
+  
+  // Validaciones básicas
+  if (email && !/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(400).json({ error: 'Formato de correo inválido.' });
+  }
+  if (telefono && !/^[0-9+\-\s]{7,20}$/.test(telefono)) {
+    return res.status(400).json({ error: 'Formato de teléfono inválido.' });
+  }
+
+  try {
+    await pool.execute(
+      `UPDATE usuarios SET correo_electronico = ?, telefono = ? WHERE id_usuario = ?`,
+      [email || null, telefono || null, userId]
+    );
+    
+    // Registrar en bitácora
+    await pool.execute(
+      `INSERT INTO bitacora_auditoria (id_usuario, tabla_afectada, operacion, valor_nuevo)
+       VALUES (?, 'usuarios', 'UPDATE_CONTACTO', ?)`,
+      [userId, JSON.stringify({ email, telefono })]
+    );
+    
+    res.json({ success: true, message: 'Datos de contacto actualizados correctamente.' });
+  } catch (error) {
+    console.error('Error actualizando contacto:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
