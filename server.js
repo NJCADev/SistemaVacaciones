@@ -4,10 +4,41 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const https = require('https');
+const fs = require('fs');
 const { sendEmailAsync } = require('./emailService');
 require('dotenv').config();
 
 const app = express();
+
+// Opciones HTTPS (solo en producción o si se especifica)
+let server;
+const useHttps = process.env.USE_HTTPS === 'true' || process.env.NODE_ENV === 'production';
+
+if (useHttps) {
+  try {
+    const privateKey = fs.readFileSync(path.join(__dirname, 'server.key'), 'utf8');
+    const certificate = fs.readFileSync(path.join(__dirname, 'server.crt'), 'utf8');
+    const credentials = { key: privateKey, cert: certificate };
+    server = https.createServer(credentials, app);
+    console.log('🔒 HTTPS habilitado');
+
+    // --- REDIRECCIÓN HTTP -> HTTPS (OPCIONAL) ---
+    const httpApp = express();
+    httpApp.use((req, res) => {
+      res.redirect(`https://${req.headers.host}${req.url}`);
+    });
+    httpApp.listen(80, () => console.log('Redirección HTTP -> HTTPS en puerto 80'));
+    // -----------------------------------------
+
+  } catch (err) {
+    console.error('No se pudieron cargar los certificados SSL. Usando HTTP.', err.message);
+    server = app;
+  }
+} else {
+  server = app;
+}
+
 const PORT = process.env.PORT || 3000;
 
 // Middleware
@@ -161,10 +192,10 @@ app.post('/api/login', async (req, res) => {
     );
 
     res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 8 * 60 * 60 * 1000
-    });
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 8 * 60 * 60 * 1000
+  });
 
     res.json({
       success: true,
@@ -1410,8 +1441,9 @@ app.delete('/api/usuarios/:id/unidades/:id_departamento', authenticateToken, req
 });
 
 // Iniciar servidor
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+server.listen(PORT, () => {
+  const protocol = useHttps ? 'https' : 'http';
+  console.log(`Servidor corriendo en ${protocol}://localhost:${PORT}`);
 });
 
 const cron = require('node-cron');
@@ -1461,3 +1493,17 @@ cron.schedule('0 23 * * *', async () => {
 }, {
   timezone: "America/Costa_Rica"
 });
+
+const { realizarBackup } = require('./backup');
+
+// Programar respaldo diario a las 2:00 AM
+cron.schedule('0 2 * * *', () => {
+  console.log('Ejecutando respaldo automático programado...');
+  realizarBackup();
+}, {
+  timezone: "America/Costa_Rica"
+});
+
+console.log('📦 Respaldo automático programado diariamente a las 2:00 AM');
+
+module.exports = app; // para testing
