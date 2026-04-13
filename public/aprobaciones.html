@@ -201,7 +201,7 @@
       if (user.rol === 'Jefatura') {
         // Jefatura solo ve pendientes de su depto (ya filtrado en backend, pero por si acaso)
         allSolicitudes = allSolicitudes.filter(s => s.estado === 'pendiente');
-      } else if (user.rol === 'RRHH' || user.rol === 'Administrador') {
+      } else if (user.rol === 'Recursos Humanos' || user.rol === 'Administrador') {
         // RRHH ve aprobadas por jefatura (y opcionalmente pendientes)
         allSolicitudes = allSolicitudes.filter(s => s.estado === 'aprobada_jefatura' || s.estado === 'pendiente');
       }
@@ -213,7 +213,7 @@
     async function init() {
       const user = await loadSession();
       if (!user) return;
-      if (!['Jefatura', 'RRHH', 'Administrador'].includes(user.rol)) {
+      if (!['Jefatura', 'Recursos Humanos', 'Administrador'].includes(user.rol)) {
         window.location.href = '/dashboard';
         return;
       }
